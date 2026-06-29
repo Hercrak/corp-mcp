@@ -565,6 +565,17 @@ pre{{margin:0;white-space:pre-wrap;word-break:break-all}}</style></head>
         threading.Thread(target=_exit, daemon=True).start()
         return _json(start_response, '200 OK', {'mensaje': 'Reiniciando proceso...'})
 
+    # ── OAuth Protected Resource Metadata (RFC 9728) — nuevo estándar MCP 2025
+    if path in ('/.well-known/oauth-protected-resource',
+                '/.well-known/oauth-protected-resource/mcp'):
+        _log('oauth_resource_meta', {'path': path, 'ip': environ.get('REMOTE_ADDR', '')})
+        return _json(start_response, '200 OK', {
+            'resource':               f'{BASE_URL}/mcp',
+            'authorization_servers':  [BASE_URL],
+            'bearer_methods_supported': ['header'],
+            'scopes_supported':       ['mcp'],
+        })
+
     # ── OAuth discovery ──────────────────────────────────────────────────────
     if path in ('/.well-known/oauth-authorization-server', '/.well-known/openid-configuration'):
         _log_request(environ, 'oauth_discovery')
