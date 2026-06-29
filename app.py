@@ -23,7 +23,7 @@ OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME         = 'corp-mcp-py'
 SERVER_VERSION      = '4.0.0'
-MCP_VERSION         = '2024-11-05'
+MCP_VERSION         = '2025-11-25'
 
 # ---------------------------------------------------------------------------
 # Request log — almacena últimas 100 entradas en memoria
@@ -512,6 +512,12 @@ def application(environ, start_response):
     method = environ.get('REQUEST_METHOD', 'GET')
     qs     = _parse_qs(environ.get('QUERY_STRING', ''))
 
+    _log('hit', {
+        'm':  method, 'p': path,
+        'ip': environ.get('REMOTE_ADDR', ''),
+        'ua': environ.get('HTTP_USER_AGENT', '')[:80],
+    })
+
     # ── Health ──────────────────────────────────────────────────────────────
     if path == '/health':
         return _json(start_response, '200 OK', {
@@ -568,7 +574,7 @@ pre{{margin:0;white-space:pre-wrap;word-break:break-all}}</style></head>
             'token_endpoint':         f'{BASE_URL}/oauth/token',
             'registration_endpoint':  f'{BASE_URL}/oauth/register',
             'response_types_supported':            ['code'],
-            'grant_types_supported':               ['authorization_code'],
+            'grant_types_supported':               ['authorization_code', 'client_credentials'],
             'code_challenge_methods_supported':    ['S256'],
             'token_endpoint_auth_methods_supported': ['client_secret_basic', 'client_secret_post'],
         })
@@ -692,6 +698,13 @@ h1{{font-size:1.4rem;margin:0 0 8px}} p{{color:#555;margin:0 0 28px;font-size:.9
            not secrets.compare_digest(client_secret.strip(), OAUTH_CLIENT_SECRET):
             _log('oauth_token_err', {'reason': 'bad credentials', 'client_id': client_id})
             return _json(start_response, '401 Unauthorized', {'error': 'invalid_client'})
+
+        if grant_type == 'client_credentials':
+            token = _new_access_token(client_id)
+            _log('oauth_token_ok', {'client_id': client_id, 'grant': 'client_credentials'})
+            return _json(start_response, '200 OK', {
+                'access_token': token, 'token_type': 'Bearer', 'expires_in': 3600,
+            })
 
         if grant_type != 'authorization_code':
             return _json(start_response, '400 Bad Request', {'error': 'unsupported_grant_type'})
