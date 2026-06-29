@@ -22,7 +22,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME         = 'corp-mcp-py'
-SERVER_VERSION      = '4.0.0'
+SERVER_VERSION      = '4.4.0'
 MCP_VERSION         = '2025-11-25'
 
 # ---------------------------------------------------------------------------
@@ -57,12 +57,35 @@ def _log_request(environ, tag='req'):
 
 
 # ---------------------------------------------------------------------------
-# OAuth 2.0 — in-memory (persiste entre requests en el mismo proceso)
+# OAuth 2.0 — persistido en disco para sobrevivir reinicios del proceso
 # ---------------------------------------------------------------------------
 
+_OAUTH_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.oauth_store.json')
 _auth_codes    = {}
 _access_tokens = {}
 _oauth_lock    = threading.Lock()
+
+
+def _oauth_load():
+    try:
+        with open(_OAUTH_FILE) as f:
+            data = json.load(f)
+        now = time.time()
+        _auth_codes.update({k: v for k, v in data.get('codes', {}).items() if v['exp'] > now})
+        _access_tokens.update({k: v for k, v in data.get('tokens', {}).items() if v['exp'] > now})
+    except Exception:
+        pass
+
+
+def _oauth_save():
+    try:
+        with open(_OAUTH_FILE, 'w') as f:
+            json.dump({'codes': _auth_codes, 'tokens': _access_tokens}, f)
+    except Exception:
+        pass
+
+
+_oauth_load()
 
 
 def _clean_expired():
@@ -82,6 +105,7 @@ def _new_auth_code(client_id, redirect_uri, code_challenge):
             'code_challenge': code_challenge,
             'exp': time.time() + 600,
         }
+        _oauth_save()
     return code
 
 
@@ -90,6 +114,7 @@ def _new_access_token(client_id):
     token = secrets.token_urlsafe(40)
     with _oauth_lock:
         _access_tokens[token] = {'client_id': client_id, 'exp': time.time() + 3600}
+        _oauth_save()
     return token
 
 
