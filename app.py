@@ -751,6 +751,11 @@ h1{{font-size:1.4rem;margin:0 0 8px}} p{{color:#555;margin:0 0 28px;font-size:.9
 
         if method == 'POST':
             _log_request(environ, 'mcp_request')
+            body = _read_body(environ)
+            _log('mcp_body', {
+                'len': len(body),
+                'preview': body[:300].decode('utf-8', errors='replace'),
+            })
 
             if OAUTH_CLIENT_ID and not _valid_token(_bearer(environ)):
                 _log('mcp_auth_fail', {'ip': environ.get('REMOTE_ADDR', ''),
@@ -760,7 +765,7 @@ h1{{font-size:1.4rem;margin:0 0 8px}} p{{color:#555;margin:0 0 28px;font-size:.9
                              [('WWW-Authenticate', f'Bearer realm="{BASE_URL}"'),
                               ('Access-Control-Allow-Origin', '*')])
 
-            body   = _read_body(environ) or b'{}'
+            body   = body or b'{}'
             result = _handle_mcp(body, environ)
             if result is None:
                 start_response('204 No Content', [('Content-Length', '0')])
