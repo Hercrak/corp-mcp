@@ -25,6 +25,20 @@ MCP_VERSION       = '2024-11-05'
 BASE_URL          = 'https://corp.pintuandes.com'
 
 # ---------------------------------------------------------------------------
+# Debug log (in-memory, últimas 30 entradas)
+# ---------------------------------------------------------------------------
+
+_debug_log  = []
+_debug_lock = threading.Lock()
+
+def _log(tag, data):
+    entry = {'t': time.strftime('%H:%M:%S'), 'tag': tag, 'data': data}
+    with _debug_lock:
+        _debug_log.append(entry)
+        if len(_debug_log) > 30:
+            _debug_log.pop(0)
+
+# ---------------------------------------------------------------------------
 # OAuth 2.0 — in-memory storage (persiste entre requests en mismo proceso)
 # ---------------------------------------------------------------------------
 
@@ -478,8 +492,15 @@ def application(environ, start_response):
         threading.Thread(target=_exit, daemon=True).start()
         return _json_resp(start_response, '200 OK', {'mensaje': 'Reiniciando proceso...'})
 
+    # ── Debug log ────────────────────────────────────────────────────────────
+    if path == '/debug':
+        with _debug_lock:
+            log_copy = list(_debug_log)
+        return _json_resp(start_response, '200 OK', log_copy)
+
     # ── OAuth discovery (RFC 8414 + OpenID alias) ────────────────────────────
     if path in ('/.well-known/oauth-authorization-server', '/.well-known/openid-configuration'):
+        _log('discovery', {'method': method, 'path': path})
         meta = {
             'issuer': BASE_URL,
             'authorization_endpoint': f'{BASE_URL}/oauth/authorize',
@@ -494,6 +515,8 @@ def application(environ, start_response):
 
     # ── OAuth dynamic client registration (RFC 7591) ─────────────────────────
     if path == '/oauth/register' and method == 'POST':
+        body_raw = _parse_body(environ)
+        _log('register', {'body': body_raw.decode('utf-8', errors='replace')[:200]})
         # Accept any registration — return pre-configured client credentials
         return _json_resp(start_response, '201 Created', {
             'client_id': OAUTH_CLIENT_ID,
@@ -511,6 +534,7 @@ def application(environ, start_response):
         redirect_uri   = params.get('redirect_uri', '')
         state          = params.get('state', '')
         code_challenge = params.get('code_challenge', '')
+        _log('authorize', {'method': method, 'client_id': client_id, 'redirect_uri': redirect_uri, 'has_challenge': bool(code_challenge)})
 
         # Accept pre-configured client OR dynamically registered clients
         if OAUTH_CLIENT_ID and client_id != OAUTH_CLIENT_ID:
@@ -556,7 +580,8 @@ def application(environ, start_response):
 
     # ── OAuth token ──────────────────────────────────────────────────────────
     if path == '/oauth/token' and method == 'POST':
-        body_params = _parse_query(_parse_body(environ).decode('utf-8', errors='replace'))
+        token_body_raw = _parse_body(environ)
+        body_params   = _parse_query(token_body_raw.decode('utf-8', errors='replace'))
         grant_type    = body_params.get('grant_type', '')
         code          = body_params.get('code', '')
         code_verifier = body_params.get('code_verifier', '')
@@ -565,20 +590,34 @@ def application(environ, start_response):
         client_id     = body_params.get('client_id', '')
         client_secret = body_params.get('client_secret', '')
         auth_header   = environ.get('HTTP_AUTHORIZATION', '')
+        auth_source   = 'body'
         if auth_header.startswith('Basic '):
             try:
                 decoded = base64.b64decode(auth_header[6:]).decode('utf-8')
                 client_id, client_secret = decoded.split(':', 1)
                 client_id     = urllib.parse.unquote_plus(client_id)
                 client_secret = urllib.parse.unquote_plus(client_secret)
+                auth_source   = 'basic'
             except Exception:
                 pass
 
+        _log('token', {
+            'grant_type': grant_type,
+            'client_id': client_id,
+            'auth_source': auth_source,
+            'has_code': bool(code),
+            'has_verifier': bool(code_verifier),
+            'body_keys': list(body_params.keys()),
+            'auth_header_prefix': auth_header[:20] if auth_header else '',
+        })
+
         # Validate client
         if not client_id or not client_secret:
+            _log('token_err', {'reason': 'missing credentials'})
             return _json_resp(start_response, '401 Unauthorized', {'error': 'invalid_client'})
         if not secrets.compare_digest(client_id.strip(), OAUTH_CLIENT_ID) or \
            not secrets.compare_digest(client_secret.strip(), OAUTH_CLIENT_SECRET):
+            _log('token_err', {'reason': 'invalid credentials', 'got_id': client_id})
             return _json_resp(start_response, '401 Unauthorized', {'error': 'invalid_client'})
 
         if grant_type != 'authorization_code':
