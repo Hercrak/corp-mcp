@@ -1,7 +1,5 @@
-#!/home/pintuand/virtualenv/repositories/crp-mcp-py/3.11/bin/python3
 import json
 import os
-import sys
 import threading
 
 
@@ -18,40 +16,39 @@ def _parse_query(qs):
     return params
 
 
-def respond(status, data):
-    body = json.dumps(data, ensure_ascii=False)
-    print(f"Status: {status}")
-    print("Content-Type: application/json; charset=utf-8")
-    print("Cache-Control: no-store")
-    print()
-    print(body)
+def _json_response(start_response, status, data):
+    body = json.dumps(data, ensure_ascii=False).encode('utf-8')
+    start_response(status, [
+        ('Content-Type', 'application/json; charset=utf-8'),
+        ('Content-Length', str(len(body))),
+        ('Cache-Control', 'no-store'),
+    ])
+    return [body]
 
 
-def main():
-    path = os.environ.get('PATH_INFO', '/')
-    params = _parse_query(os.environ.get('QUERY_STRING', ''))
+def application(environ, start_response):
+    path = environ.get('PATH_INFO', '/')
+    params = _parse_query(environ.get('QUERY_STRING', ''))
 
-    if path == '/health' or path == '/' or path == '':
-        respond('200 OK', {
+    if path == '/health':
+        return _json_response(start_response, '200 OK', {
             'status': 'ok',
             'service': 'crp-mcp-py',
             'version': VERSION,
             'language': 'Python 3'
         })
 
-    elif path == '/reload':
+    if path == '/reload':
         if not RELOAD_TOKEN or params.get('token') != RELOAD_TOKEN:
-            respond('401 Unauthorized', {'error': 'Token inválido'})
-        else:
-            respond('200 OK', {'mensaje': 'Reiniciando proceso...'})
-            def _exit():
-                import time
-                time.sleep(0.5)
-                os._exit(0)
-            threading.Thread(target=_exit, daemon=True).start()
+            return _json_response(start_response, '401 Unauthorized',
+                                  {'error': 'Token inválido'})
+        def _exit():
+            import time
+            time.sleep(0.5)
+            os._exit(0)
+        threading.Thread(target=_exit, daemon=True).start()
+        return _json_response(start_response, '200 OK',
+                              {'mensaje': 'Reiniciando proceso...'})
 
-    else:
-        respond('404 Not Found', {'error': 'Ruta no encontrada'})
-
-
-main()
+    return _json_response(start_response, '404 Not Found',
+                          {'error': 'Ruta no encontrada'})
