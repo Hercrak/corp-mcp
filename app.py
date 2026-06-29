@@ -22,7 +22,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME         = 'corp-mcp-py'
-SERVER_VERSION      = '4.5.0'
+SERVER_VERSION      = '4.6.0'
 MCP_VERSION         = '2025-11-25'
 
 # ---------------------------------------------------------------------------
@@ -265,36 +265,87 @@ TOOLS = [
     {
         'name': 'consultar_ventas',
         'description': (
-            'Consulta estadísticas de ventas de Corporativo C.A. por período y filtros opcionales. '
-            'Retorna unidades vendidas (oprCnt), monto facturado (oprMnt) y costo (oprCst) agrupados por mes. '
-            'Úsalo cuando el usuario pregunte por ventas, facturación, ingresos, unidades vendidas o rendimiento comercial. '
-            'Todos los parámetros son opcionales — sin filtros retorna todas las ventas del rango de fechas. '
+            'Consulta estadísticas de ventas de Corporativo C.A. por período con filtros obligatorios. '
+            'Retorna por fila: Cantidad (Unidades Vendidas), Monto (en dólares) y Costo (en dólares). '
+            'REGLA OBLIGATORIA: además del rango de fechas, SIEMPRE debes aplicar al menos un filtro adicional '
+            '(producto, almacén, cliente, vendedor o marca). Nunca ejecutes sin al menos uno de estos filtros '
+            'porque la consulta retornaría miles de registros y la respuesta sería lenta o inutilizable. '
+            'Si el usuario no especifica ningún filtro adicional, pídele que indique al menos uno antes de ejecutar. '
+            'IMPORTANTE sobre nombres vs códigos: los filtros usan CÓDIGOS, no nombres. '
+            'Si el usuario menciona un cliente, vendedor o producto por nombre (ej: "REYES CONTRERAS"), '
+            'primero usa buscar_clientes, buscar_vendedores o buscar_productos para obtener su código, '
+            'y luego llama a consultar_ventas con ese código. '
             'Ejemplos de interpretación: '
-            '"ventas de enero 2026" → desde=2026-01-01, hasta=2026-01-31; '
-            '"ventas del producto BOLSA" → producto_desde=BOLSA, producto_hasta=BOLSA; '
-            '"ventas del vendedor 24" → vendedor_desde=24, vendedor_hasta=24; '
-            '"ventas al cliente 00753" → cliente_desde=00753, cliente_hasta=00753; '
-            '"ventas del almacén 002" → almacen_desde=002, almacen_hasta=002.'
+            '"ventas de enero 2026 al cliente REYES" → primero buscar_clientes("REYES"), obtener código, luego consultar_ventas; '
+            '"ventas del producto BOLSA en febrero" → producto_desde=BOLSA, producto_hasta=BOLSA, desde=..., hasta=...; '
+            '"ventas del vendedor 24 en 2026" → vendedor_desde=24, vendedor_hasta=24; '
+            '"ventas del almacén 002 este mes" → almacen_desde=002, almacen_hasta=002.'
         ),
         'inputSchema': {
             'type': 'object',
             'properties': {
                 'desde':           {'type': 'string', 'description': 'Fecha inicio YYYY-MM-DD (default: primer día del año actual)'},
                 'hasta':           {'type': 'string', 'description': 'Fecha fin YYYY-MM-DD (default: hoy)'},
-                'producto_desde':  {'type': 'string', 'description': 'Código de producto inicial (ej: BOLSA, P0104093)'},
-                'producto_hasta':  {'type': 'string', 'description': 'Código de producto final. Igual a producto_desde para un solo producto'},
+                'producto_desde':  {'type': 'string', 'description': 'Código de producto inicial (ej: BOLSA, P0104093). Úsalo solo, sin desde/hasta si es un producto específico'},
+                'producto_hasta':  {'type': 'string', 'description': 'Código de producto final. Dejar igual a producto_desde para un solo producto'},
                 'almacen_desde':   {'type': 'string', 'description': 'Código de almacén inicial (ej: 001, 002)'},
-                'almacen_hasta':   {'type': 'string', 'description': 'Código de almacén final'},
-                'cliente_desde':   {'type': 'string', 'description': 'Código de cliente inicial'},
-                'cliente_hasta':   {'type': 'string', 'description': 'Código de cliente final'},
-                'vendedor_desde':  {'type': 'string', 'description': 'Código de vendedor inicial (ej: 24, 51)'},
-                'vendedor_hasta':  {'type': 'string', 'description': 'Código de vendedor final'},
+                'almacen_hasta':   {'type': 'string', 'description': 'Código de almacén final. Igual a almacen_desde para un solo almacén'},
+                'cliente_desde':   {'type': 'string', 'description': 'Código de cliente inicial (obtenido con buscar_clientes si solo se conoce el nombre)'},
+                'cliente_hasta':   {'type': 'string', 'description': 'Código de cliente final. Igual a cliente_desde para un solo cliente'},
+                'vendedor_desde':  {'type': 'string', 'description': 'Código de vendedor inicial (obtenido con buscar_vendedores si solo se conoce el nombre)'},
+                'vendedor_hasta':  {'type': 'string', 'description': 'Código de vendedor final. Igual a vendedor_desde para un solo vendedor'},
                 'sucursal_desde':  {'type': 'string', 'description': 'Código de sucursal inicial (ej: 0)'},
                 'sucursal_hasta':  {'type': 'string', 'description': 'Código de sucursal final'},
-                'marca_desde':     {'type': 'string', 'description': 'Código de marca/proveedor inicial'},
+                'marca_desde':     {'type': 'string', 'description': 'Código de marca/proveedor inicial (obtenido con buscar_socios si solo se conoce el nombre)'},
                 'marca_hasta':     {'type': 'string', 'description': 'Código de marca/proveedor final'},
             },
             'required': [],
+        },
+    },
+    {
+        'name': 'buscar_clientes',
+        'description': (
+            'Busca clientes de ventas por nombre o código. '
+            'Úsalo cuando el usuario mencione un cliente por nombre y necesites el código para filtrar consultar_ventas. '
+            'Ejemplo: el usuario dice "ventas al cliente REYES CONTRERAS" → buscar_clientes("REYES") → obtener socCdg → pasar a consultar_ventas.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'buscar': {'type': 'string', 'description': 'Nombre o código de cliente a buscar (búsqueda parcial)'},
+                'limite': {'type': 'integer', 'description': 'Máximo de registros (default 20)'},
+            },
+            'required': ['buscar'],
+        },
+    },
+    {
+        'name': 'buscar_vendedores',
+        'description': (
+            'Busca vendedores por nombre o código. '
+            'Úsalo cuando el usuario mencione un vendedor por nombre y necesites el código para filtrar consultar_ventas.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'buscar': {'type': 'string', 'description': 'Nombre o código de vendedor a buscar (búsqueda parcial)'},
+                'limite': {'type': 'integer', 'description': 'Máximo de registros (default 20)'},
+            },
+            'required': ['buscar'],
+        },
+    },
+    {
+        'name': 'buscar_productos',
+        'description': (
+            'Busca productos por nombre o código. '
+            'Úsalo cuando el usuario mencione un producto por nombre y necesites el código para filtrar consultar_ventas.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'buscar': {'type': 'string', 'description': 'Nombre o código de producto a buscar (búsqueda parcial)'},
+                'limite': {'type': 'integer', 'description': 'Máximo de registros (default 20)'},
+            },
+            'required': ['buscar'],
         },
     },
 ]
@@ -490,8 +541,9 @@ def _tool_consultar_ventas(args):
         return 'No se encontraron ventas con los filtros indicados.'
 
     lines = [f'Estadística de ventas ({len(rows)} registros):',
-             f'{"Mes":<12} {"Producto":<16} {"Almacén":<10} {"Cliente":<22} {"Vendedor":<20} {"Cant":>8} {"Monto":>12} {"Costo":>12}']
-    lines.append('-' * 120)
+             f'{"Mes":<12} {"Producto":<16} {"Almacén":<10} {"Cliente":<22} {"Vendedor":<20} '
+             f'{"Cant.(Unid.)":>12} {"Monto (USD)":>12} {"Costo (USD)":>12}']
+    lines.append('-' * 126)
     for r in rows:
         lines.append(
             f"{str(r.get('oprMes','')):<12} "
@@ -499,15 +551,63 @@ def _tool_consultar_ventas(args):
             f"{str(r.get('Almacen','')).strip():<10} "
             f"{str(r.get('Cliente','')).strip():<22} "
             f"{str(r.get('Vendedor','')).strip():<20} "
-            f"{float(r.get('oprCnt',0)):>8.2f} "
+            f"{float(r.get('oprCnt',0)):>12.2f} "
             f"{float(r.get('oprMnt',0)):>12.2f} "
             f"{float(r.get('oprCst',0)):>12.2f}"
         )
     total_cnt = sum(float(r.get('oprCnt', 0)) for r in rows)
     total_mnt = sum(float(r.get('oprMnt', 0)) for r in rows)
     total_cst = sum(float(r.get('oprCst', 0)) for r in rows)
-    lines.append('-' * 120)
-    lines.append(f"{'TOTALES':<62} {total_cnt:>8.2f} {total_mnt:>12.2f} {total_cst:>12.2f}")
+    lines.append('-' * 126)
+    lines.append(f"{'TOTALES':<62} {total_cnt:>12.2f} {total_mnt:>12.2f} {total_cst:>12.2f}")
+    return '\n'.join(lines)
+
+
+def _tool_buscar_clientes(args):
+    t = f"%{args.get('buscar', '')}%"
+    limit = min(int(args.get('limite', 20)), 100)
+    rows = _query("""
+        SELECT TRIM(socCdg) AS socCdg, TRIM(socDsc) AS socDsc, socRif
+        FROM clt WHERE socCdg LIKE %s OR socDsc LIKE %s
+        ORDER BY socDsc LIMIT %s
+    """, [t, t, limit])
+    if not rows:
+        return 'No se encontraron clientes con ese criterio.'
+    lines = [f'Clientes encontrados ({len(rows)} registros):']
+    for r in rows:
+        lines.append(f"  Código: {r['socCdg']} | {(r.get('socDsc') or '').strip()} | RIF: {r.get('socRif','')}")
+    return '\n'.join(lines)
+
+
+def _tool_buscar_vendedores(args):
+    t = f"%{args.get('buscar', '')}%"
+    limit = min(int(args.get('limite', 20)), 100)
+    rows = _query("""
+        SELECT TRIM(socCdg) AS socCdg, TRIM(socDsc) AS socDsc
+        FROM vnd WHERE socCdg LIKE %s OR socDsc LIKE %s
+        ORDER BY socDsc LIMIT %s
+    """, [t, t, limit])
+    if not rows:
+        return 'No se encontraron vendedores con ese criterio.'
+    lines = [f'Vendedores encontrados ({len(rows)} registros):']
+    for r in rows:
+        lines.append(f"  Código: {r['socCdg']} | {(r.get('socDsc') or '').strip()}")
+    return '\n'.join(lines)
+
+
+def _tool_buscar_productos(args):
+    t = f"%{args.get('buscar', '')}%"
+    limit = min(int(args.get('limite', 20)), 100)
+    rows = _query("""
+        SELECT TRIM(prdCdg) AS prdCdg, TRIM(prdDsc) AS prdDsc, TRIM(mrcCdg) AS mrcCdg
+        FROM prd WHERE prdCdg LIKE %s OR prdDsc LIKE %s
+        ORDER BY prdDsc LIMIT %s
+    """, [t, t, limit])
+    if not rows:
+        return 'No se encontraron productos con ese criterio.'
+    lines = [f'Productos encontrados ({len(rows)} registros):']
+    for r in rows:
+        lines.append(f"  Código: {r['prdCdg']} | {(r.get('prdDsc') or '').strip()} | Marca: {r.get('mrcCdg','')}")
     return '\n'.join(lines)
 
 
@@ -524,6 +624,9 @@ def _call_tool(name, arguments):
         if name == 'resumen_compras':               return _tool_resumen_compras(arguments)
         if name == 'consultar_socios':              return _tool_consultar_socios(arguments)
         if name == 'consultar_ventas':              return _tool_consultar_ventas(arguments)
+        if name == 'buscar_clientes':               return _tool_buscar_clientes(arguments)
+        if name == 'buscar_vendedores':             return _tool_buscar_vendedores(arguments)
+        if name == 'buscar_productos':              return _tool_buscar_productos(arguments)
         return f'Herramienta desconocida: {name}'
     except Exception as e:
         return f'Error al ejecutar {name}: {str(e)}'
