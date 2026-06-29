@@ -22,7 +22,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME         = 'corp-mcp-py'
-SERVER_VERSION      = '4.4.0'
+SERVER_VERSION      = '4.5.0'
 MCP_VERSION         = '2025-11-25'
 
 # ---------------------------------------------------------------------------
@@ -262,6 +262,41 @@ TOOLS = [
             'required': [],
         },
     },
+    {
+        'name': 'consultar_ventas',
+        'description': (
+            'Consulta estadísticas de ventas de Corporativo C.A. por período y filtros opcionales. '
+            'Retorna unidades vendidas (oprCnt), monto facturado (oprMnt) y costo (oprCst) agrupados por mes. '
+            'Úsalo cuando el usuario pregunte por ventas, facturación, ingresos, unidades vendidas o rendimiento comercial. '
+            'Todos los parámetros son opcionales — sin filtros retorna todas las ventas del rango de fechas. '
+            'Ejemplos de interpretación: '
+            '"ventas de enero 2026" → desde=2026-01-01, hasta=2026-01-31; '
+            '"ventas del producto BOLSA" → producto_desde=BOLSA, producto_hasta=BOLSA; '
+            '"ventas del vendedor 24" → vendedor_desde=24, vendedor_hasta=24; '
+            '"ventas al cliente 00753" → cliente_desde=00753, cliente_hasta=00753; '
+            '"ventas del almacén 002" → almacen_desde=002, almacen_hasta=002.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'desde':           {'type': 'string', 'description': 'Fecha inicio YYYY-MM-DD (default: primer día del año actual)'},
+                'hasta':           {'type': 'string', 'description': 'Fecha fin YYYY-MM-DD (default: hoy)'},
+                'producto_desde':  {'type': 'string', 'description': 'Código de producto inicial (ej: BOLSA, P0104093)'},
+                'producto_hasta':  {'type': 'string', 'description': 'Código de producto final. Igual a producto_desde para un solo producto'},
+                'almacen_desde':   {'type': 'string', 'description': 'Código de almacén inicial (ej: 001, 002)'},
+                'almacen_hasta':   {'type': 'string', 'description': 'Código de almacén final'},
+                'cliente_desde':   {'type': 'string', 'description': 'Código de cliente inicial'},
+                'cliente_hasta':   {'type': 'string', 'description': 'Código de cliente final'},
+                'vendedor_desde':  {'type': 'string', 'description': 'Código de vendedor inicial (ej: 24, 51)'},
+                'vendedor_hasta':  {'type': 'string', 'description': 'Código de vendedor final'},
+                'sucursal_desde':  {'type': 'string', 'description': 'Código de sucursal inicial (ej: 0)'},
+                'sucursal_hasta':  {'type': 'string', 'description': 'Código de sucursal final'},
+                'marca_desde':     {'type': 'string', 'description': 'Código de marca/proveedor inicial'},
+                'marca_hasta':     {'type': 'string', 'description': 'Código de marca/proveedor final'},
+            },
+            'required': [],
+        },
+    },
 ]
 
 
@@ -423,6 +458,59 @@ def _tool_consultar_socios(args):
     return '\n'.join(lines)
 
 
+def _tool_consultar_ventas(args):
+    conn = _get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.callproc('vnt', [
+                'PINTUADM',
+                'vntStd',
+                args.get('desde')          or None,
+                args.get('hasta')          or None,
+                args.get('producto_desde') or '',
+                args.get('producto_hasta') or '',
+                args.get('almacen_desde')  or '',
+                args.get('almacen_hasta')  or '',
+                args.get('cliente_desde')  or '',
+                args.get('cliente_hasta')  or '',
+                args.get('vendedor_desde') or '',
+                args.get('vendedor_hasta') or '',
+                args.get('sucursal_desde') or '',
+                args.get('sucursal_hasta') or '',
+                args.get('marca_desde')    or '',
+                args.get('marca_hasta')    or '',
+            ])
+            rows = []
+            for result in cur.stored_results():
+                rows = result.fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return 'No se encontraron ventas con los filtros indicados.'
+
+    lines = [f'Estadística de ventas ({len(rows)} registros):',
+             f'{"Mes":<12} {"Producto":<16} {"Almacén":<10} {"Cliente":<22} {"Vendedor":<20} {"Cant":>8} {"Monto":>12} {"Costo":>12}']
+    lines.append('-' * 120)
+    for r in rows:
+        lines.append(
+            f"{str(r.get('oprMes','')):<12} "
+            f"{str(r.get('prdCdg','')).strip():<16} "
+            f"{str(r.get('Almacen','')).strip():<10} "
+            f"{str(r.get('Cliente','')).strip():<22} "
+            f"{str(r.get('Vendedor','')).strip():<20} "
+            f"{float(r.get('oprCnt',0)):>8.2f} "
+            f"{float(r.get('oprMnt',0)):>12.2f} "
+            f"{float(r.get('oprCst',0)):>12.2f}"
+        )
+    total_cnt = sum(float(r.get('oprCnt', 0)) for r in rows)
+    total_mnt = sum(float(r.get('oprMnt', 0)) for r in rows)
+    total_cst = sum(float(r.get('oprCst', 0)) for r in rows)
+    lines.append('-' * 120)
+    lines.append(f"{'TOTALES':<62} {total_cnt:>8.2f} {total_mnt:>12.2f} {total_cst:>12.2f}")
+    return '\n'.join(lines)
+
+
 def _call_tool(name, arguments):
     if not DB_AVAILABLE:
         return 'Error: PyMySQL no está instalado.'
@@ -435,6 +523,7 @@ def _call_tool(name, arguments):
         if name == 'buscar_compra':                 return _tool_buscar_compra(arguments)
         if name == 'resumen_compras':               return _tool_resumen_compras(arguments)
         if name == 'consultar_socios':              return _tool_consultar_socios(arguments)
+        if name == 'consultar_ventas':              return _tool_consultar_ventas(arguments)
         return f'Herramienta desconocida: {name}'
     except Exception as e:
         return f'Error al ejecutar {name}: {str(e)}'
