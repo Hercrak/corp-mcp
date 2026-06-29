@@ -1,0 +1,2 @@
+# Fase 1: sin dependencias - validar Python en Passenger
+# Fase 2 agregará: mcp, flask
