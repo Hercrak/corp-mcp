@@ -478,15 +478,31 @@ def application(environ, start_response):
         threading.Thread(target=_exit, daemon=True).start()
         return _json_resp(start_response, '200 OK', {'mensaje': 'Reiniciando proceso...'})
 
-    # ── OAuth discovery ──────────────────────────────────────────────────────
-    if path == '/.well-known/oauth-authorization-server':
-        return _json_resp(start_response, '200 OK', {
+    # ── OAuth discovery (RFC 8414 + OpenID alias) ────────────────────────────
+    if path in ('/.well-known/oauth-authorization-server', '/.well-known/openid-configuration'):
+        meta = {
             'issuer': BASE_URL,
             'authorization_endpoint': f'{BASE_URL}/oauth/authorize',
             'token_endpoint': f'{BASE_URL}/oauth/token',
+            'registration_endpoint': f'{BASE_URL}/oauth/register',
             'response_types_supported': ['code'],
             'grant_types_supported': ['authorization_code'],
             'code_challenge_methods_supported': ['S256'],
+            'token_endpoint_auth_methods_supported': ['client_secret_basic', 'client_secret_post'],
+        }
+        return _json_resp(start_response, '200 OK', meta)
+
+    # ── OAuth dynamic client registration (RFC 7591) ─────────────────────────
+    if path == '/oauth/register' and method == 'POST':
+        # Accept any registration — return pre-configured client credentials
+        return _json_resp(start_response, '201 Created', {
+            'client_id': OAUTH_CLIENT_ID,
+            'client_secret': OAUTH_CLIENT_SECRET,
+            'client_id_issued_at': int(time.time()),
+            'client_secret_expires_at': 0,
+            'token_endpoint_auth_method': 'client_secret_basic',
+            'grant_types': ['authorization_code'],
+            'response_types': ['code'],
         })
 
     # ── OAuth authorize ──────────────────────────────────────────────────────
@@ -496,7 +512,8 @@ def application(environ, start_response):
         state          = params.get('state', '')
         code_challenge = params.get('code_challenge', '')
 
-        if client_id != OAUTH_CLIENT_ID:
+        # Accept pre-configured client OR dynamically registered clients
+        if OAUTH_CLIENT_ID and client_id != OAUTH_CLIENT_ID:
             return _json_resp(start_response, '400 Bad Request', {'error': 'invalid_client'})
 
         if method == 'POST':
@@ -504,10 +521,12 @@ def application(environ, start_response):
             action = body_params.get('action', '')
             if action == 'approve':
                 code = _new_auth_code(client_id, redirect_uri, code_challenge)
-                location = f"{redirect_uri}?code={urllib.parse.quote(code)}&state={urllib.parse.quote(state)}"
-                start_response('302 Found', [('Location', location)])
+                sep = '&' if '?' in redirect_uri else '?'
+                location = f"{redirect_uri}{sep}code={urllib.parse.quote(code)}&state={urllib.parse.quote(state)}"
+                start_response('302 Found', [('Location', location), ('Cache-Control', 'no-store')])
                 return [b'']
-            location = f"{redirect_uri}?error=access_denied&state={urllib.parse.quote(state)}"
+            sep = '&' if '?' in redirect_uri else '?'
+            location = f"{redirect_uri}{sep}error=access_denied&state={urllib.parse.quote(state)}"
             start_response('302 Found', [('Location', location)])
             return [b'']
 
@@ -541,12 +560,25 @@ def application(environ, start_response):
         grant_type    = body_params.get('grant_type', '')
         code          = body_params.get('code', '')
         code_verifier = body_params.get('code_verifier', '')
+
+        # Client credentials: body params OR HTTP Basic Auth header
         client_id     = body_params.get('client_id', '')
         client_secret = body_params.get('client_secret', '')
+        auth_header   = environ.get('HTTP_AUTHORIZATION', '')
+        if auth_header.startswith('Basic '):
+            try:
+                decoded = base64.b64decode(auth_header[6:]).decode('utf-8')
+                client_id, client_secret = decoded.split(':', 1)
+                client_id     = urllib.parse.unquote_plus(client_id)
+                client_secret = urllib.parse.unquote_plus(client_secret)
+            except Exception:
+                pass
 
         # Validate client
-        if not secrets.compare_digest(client_id, OAUTH_CLIENT_ID) or \
-           not secrets.compare_digest(client_secret, OAUTH_CLIENT_SECRET):
+        if not client_id or not client_secret:
+            return _json_resp(start_response, '401 Unauthorized', {'error': 'invalid_client'})
+        if not secrets.compare_digest(client_id.strip(), OAUTH_CLIENT_ID) or \
+           not secrets.compare_digest(client_secret.strip(), OAUTH_CLIENT_SECRET):
             return _json_resp(start_response, '401 Unauthorized', {'error': 'invalid_client'})
 
         if grant_type != 'authorization_code':
@@ -558,8 +590,9 @@ def application(environ, start_response):
         if not entry or time.time() > entry['exp']:
             return _json_resp(start_response, '400 Bad Request', {'error': 'invalid_grant'})
 
-        if entry.get('code_challenge') and not _verify_pkce(code_verifier, entry['code_challenge']):
-            return _json_resp(start_response, '400 Bad Request', {'error': 'invalid_grant'})
+        if entry.get('code_challenge') and code_verifier:
+            if not _verify_pkce(code_verifier, entry['code_challenge']):
+                return _json_resp(start_response, '400 Bad Request', {'error': 'invalid_grant'})
 
         token = _new_access_token(client_id)
         return _json_resp(start_response, '200 OK', {
