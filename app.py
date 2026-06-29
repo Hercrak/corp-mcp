@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import secrets
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -16,34 +17,51 @@ try:
 except ImportError:
     DB_AVAILABLE = False
 
-RELOAD_TOKEN      = os.environ.get('RELOAD_TOKEN', '')
-OAUTH_CLIENT_ID   = os.environ.get('OAUTH_CLIENT_ID', '')
+RELOAD_TOKEN        = os.environ.get('RELOAD_TOKEN', '')
+OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
-SERVER_NAME       = 'corp-mcp-py'
-SERVER_VERSION    = '3.0.0'
-MCP_VERSION       = '2024-11-05'
-BASE_URL          = 'https://corp.pintuandes.com'
+BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
+SERVER_NAME         = 'corp-mcp-py'
+SERVER_VERSION      = '4.0.0'
+MCP_VERSION         = '2024-11-05'
 
 # ---------------------------------------------------------------------------
-# Debug log (in-memory, últimas 30 entradas)
+# Request log — almacena últimas 100 entradas en memoria
 # ---------------------------------------------------------------------------
 
-_debug_log  = []
-_debug_lock = threading.Lock()
+_log_entries = []
+_log_lock    = threading.Lock()
 
 def _log(tag, data):
-    entry = {'t': time.strftime('%H:%M:%S'), 'tag': tag, 'data': data}
-    with _debug_lock:
-        _debug_log.append(entry)
-        if len(_debug_log) > 30:
-            _debug_log.pop(0)
+    entry = {
+        't':   time.strftime('%Y-%m-%d %H:%M:%S'),
+        'tag': tag,
+        'data': data,
+    }
+    with _log_lock:
+        _log_entries.append(entry)
+        if len(_log_entries) > 100:
+            _log_entries.pop(0)
+
+
+def _log_request(environ, tag='req'):
+    """Registra los headers y body de una petición entrante."""
+    headers = {}
+    for key, val in environ.items():
+        if key.startswith('HTTP_'):
+            headers[key[5:].replace('_', '-').title()] = val
+        elif key in ('CONTENT_TYPE', 'CONTENT_LENGTH', 'REQUEST_METHOD',
+                     'PATH_INFO', 'QUERY_STRING', 'REMOTE_ADDR'):
+            headers[key] = val
+    _log(tag, headers)
+
 
 # ---------------------------------------------------------------------------
-# OAuth 2.0 — in-memory storage (persiste entre requests en mismo proceso)
+# OAuth 2.0 — in-memory (persiste entre requests en el mismo proceso)
 # ---------------------------------------------------------------------------
 
-_auth_codes    = {}   # code  -> {client_id, redirect_uri, code_challenge, exp}
-_access_tokens = {}   # token -> {client_id, exp}
+_auth_codes    = {}
+_access_tokens = {}
 _oauth_lock    = threading.Lock()
 
 
@@ -59,8 +77,10 @@ def _new_auth_code(client_id, redirect_uri, code_challenge):
     code = secrets.token_urlsafe(32)
     with _oauth_lock:
         _auth_codes[code] = {
-            'client_id': client_id, 'redirect_uri': redirect_uri,
-            'code_challenge': code_challenge, 'exp': time.time() + 600,
+            'client_id': client_id,
+            'redirect_uri': redirect_uri,
+            'code_challenge': code_challenge,
+            'exp': time.time() + 600,
         }
     return code
 
@@ -79,7 +99,7 @@ def _valid_token(token):
 
 
 def _verify_pkce(verifier, challenge):
-    digest = hashlib.sha256(verifier.encode()).digest()
+    digest  = hashlib.sha256(verifier.encode()).digest()
     computed = base64.urlsafe_b64encode(digest).rstrip(b'=').decode()
     return secrets.compare_digest(computed, challenge)
 
@@ -134,11 +154,11 @@ def _dumps(obj):
 # ---------------------------------------------------------------------------
 
 TIPO_LABEL = {
-    'FACT': 'Factura', 'N/CR': 'Nota de Crédito', 'N/DB': 'Nota de Débito',
-    'RIVA': 'Retención de IVA', 'ISLR': 'Impuesto Sobre la Renta',
-    'ADEL': 'Adelanto / Pago', 'AJPA': 'Ajuste Positivo Automático',
-    'AJPM': 'Ajuste Positivo Manual', 'AJNA': 'Ajuste Negativo Automático',
-    'AJNM': 'Ajuste Negativo Manual',
+    'FACT': 'Factura',          'N/CR': 'Nota de Crédito',
+    'N/DB': 'Nota de Débito',   'RIVA': 'Retención de IVA',
+    'ISLR': 'Impuesto Sobre la Renta', 'ADEL': 'Adelanto / Pago',
+    'AJPA': 'Ajuste Positivo Automático', 'AJPM': 'Ajuste Positivo Manual',
+    'AJNA': 'Ajuste Negativo Automático', 'AJNM': 'Ajuste Negativo Manual',
 }
 
 TOOLS = [
@@ -172,22 +192,22 @@ TOOLS = [
         'inputSchema': {
             'type': 'object',
             'properties': {
-                'tipo': {'type': 'string', 'description': 'Tipo: FACT, N/CR, N/DB, RIVA, ISLR'},
-                'desde': {'type': 'string', 'description': 'Fecha inicial YYYY-MM-DD'},
-                'hasta': {'type': 'string', 'description': 'Fecha final YYYY-MM-DD'},
-                'con_saldo': {'type': 'boolean', 'description': 'Solo con saldo pendiente'},
-                'limite': {'type': 'integer', 'description': 'Máximo de registros (default 20)'},
+                'tipo':     {'type': 'string',  'description': 'Tipo: FACT, N/CR, N/DB, RIVA, ISLR'},
+                'desde':    {'type': 'string',  'description': 'Fecha inicial YYYY-MM-DD'},
+                'hasta':    {'type': 'string',  'description': 'Fecha final YYYY-MM-DD'},
+                'con_saldo':{'type': 'boolean', 'description': 'Solo con saldo pendiente'},
+                'limite':   {'type': 'integer', 'description': 'Máximo de registros (default 20)'},
             },
             'required': [],
         },
     },
     {
         'name': 'buscar_compra',
-        'description': 'Busca un documento de compra por tipo y número. Ejemplo: tipo=FACT, numero=1',
+        'description': 'Busca un documento de compra por tipo y número. Ejemplo: tipo=FACT, numero=18102',
         'inputSchema': {
             'type': 'object',
             'properties': {
-                'tipo': {'type': 'string', 'description': 'Tipo: FACT, N/CR, N/DB, RIVA, ISLR'},
+                'tipo':   {'type': 'string',  'description': 'Tipo: FACT, N/CR, N/DB, RIVA, ISLR'},
                 'numero': {'type': 'integer', 'description': 'Número del documento'},
             },
             'required': ['tipo', 'numero'],
@@ -211,7 +231,7 @@ TOOLS = [
         'inputSchema': {
             'type': 'object',
             'properties': {
-                'buscar': {'type': 'string', 'description': 'Nombre o RIF a buscar'},
+                'buscar': {'type': 'string',  'description': 'Nombre o RIF a buscar'},
                 'limite': {'type': 'integer', 'description': 'Máximo de registros (default 20)'},
             },
             'required': [],
@@ -283,7 +303,7 @@ def _tool_saldos_pendientes():
     lines = [f'Documentos con saldo pendiente ({len(rows)} registros):']
     for r in rows:
         tipo = TIPO_LABEL.get(r['docTip'], r['docTip'])
-        vnc = r['docVnc'].isoformat() if hasattr(r.get('docVnc'), 'isoformat') else r.get('docVnc', '')
+        vnc  = r['docVnc'].isoformat() if hasattr(r.get('docVnc'), 'isoformat') else r.get('docVnc', '')
         lines.append(f"  {tipo} #{r['docNmr']} | {(r.get('socDsc') or '').strip()} | Vence: {vnc} | Saldo: {r['docSld']} {r['mndCdg']}")
     return '\n'.join(lines)
 
@@ -305,7 +325,7 @@ def _tool_consultar_compras(args):
         SELECT c.docTip, c.docNmr, c.docRgt, c.docVnc,
                TRIM(c.socCdg) AS socCdg, TRIM(p.socDsc) AS socDsc, p.socRif,
                TRIM(c.mndCdg) AS mndCdg,
-               ROUND(c.docTtl,2) AS docTtl, ROUND(c.docSld,2) AS docSld, c.docAnl
+               ROUND(c.docTtl,2) AS docTtl, ROUND(c.docSld,2) AS docSld
         FROM cmpDoc c LEFT JOIN prv p ON p.socCdg=c.socCdg
         {where} ORDER BY c.docRgt DESC, c.docNmr DESC LIMIT %s
     """, params)
@@ -314,7 +334,7 @@ def _tool_consultar_compras(args):
     lines = [f'Compras encontradas ({len(rows)} registros):']
     for r in rows:
         tipo = TIPO_LABEL.get(r['docTip'], r['docTip'])
-        rgt = r['docRgt'].isoformat() if hasattr(r.get('docRgt'), 'isoformat') else r.get('docRgt', '')
+        rgt  = r['docRgt'].isoformat() if hasattr(r.get('docRgt'), 'isoformat') else r.get('docRgt', '')
         lines.append(f"  {tipo} #{r['docNmr']} | {(r.get('socDsc') or '').strip()} | {rgt} | {r['docTtl']} {r['mndCdg']} | Saldo: {r['docSld']}")
     return '\n'.join(lines)
 
@@ -339,12 +359,15 @@ def _tool_resumen_compras(args):
     where = ('WHERE ' + ' AND '.join(conditions)) if conditions else ''
     rows = _query(f"""
         SELECT docTip AS tipo,
-               CASE docTip WHEN 'FACT' THEN 'Factura' WHEN 'N/CR' THEN 'Nota de Crédito'
+               CASE docTip
+                 WHEN 'FACT' THEN 'Factura'        WHEN 'N/CR' THEN 'Nota de Crédito'
                  WHEN 'N/DB' THEN 'Nota de Débito' WHEN 'RIVA' THEN 'Retención de IVA'
-                 WHEN 'ISLR' THEN 'Impuesto Sobre la Renta' WHEN 'ADEL' THEN 'Adelanto / Pago'
+                 WHEN 'ISLR' THEN 'Impuesto Sobre la Renta'
+                 WHEN 'ADEL' THEN 'Adelanto / Pago'
                  ELSE docTip END AS descripcion,
                COUNT(*) AS cantidad,
-               ROUND(SUM(docTtl),2) AS total, ROUND(SUM(docSld),2) AS saldo_pendiente
+               ROUND(SUM(docTtl),2) AS total,
+               ROUND(SUM(docSld),2) AS saldo_pendiente
         FROM cmpDoc {where} GROUP BY docTip ORDER BY docTip
     """, params)
     if not rows:
@@ -364,7 +387,7 @@ def _tool_consultar_socios(args):
     limit = min(int(args.get('limite', 20)), 100); params.append(limit)
     rows = _query(f"""
         SELECT TRIM(socCdg) AS socCdg, TRIM(socDsc) AS socDsc,
-               socRif, prcTip, socTlf, socEml
+               socRif, socTlf, socEml
         FROM prv {where} ORDER BY socDsc LIMIT %s
     """, params)
     if not rows:
@@ -379,14 +402,14 @@ def _call_tool(name, arguments):
     if not DB_AVAILABLE:
         return 'Error: PyMySQL no está instalado.'
     try:
-        if name == 'Corporativo_compras_ayer':    return _tool_compras_ayer()
-        if name == 'Corporativo_compras_mes':     return _tool_compras_mes()
-        if name == 'Corporativo_tasas_hoy':       return _tool_tasas_hoy()
+        if name == 'Corporativo_compras_ayer':      return _tool_compras_ayer()
+        if name == 'Corporativo_compras_mes':       return _tool_compras_mes()
+        if name == 'Corporativo_tasas_hoy':         return _tool_tasas_hoy()
         if name == 'Corporativo_saldos_pendientes': return _tool_saldos_pendientes()
-        if name == 'consultar_compras':           return _tool_consultar_compras(arguments)
-        if name == 'buscar_compra':               return _tool_buscar_compra(arguments)
-        if name == 'resumen_compras':             return _tool_resumen_compras(arguments)
-        if name == 'consultar_socios':            return _tool_consultar_socios(arguments)
+        if name == 'consultar_compras':             return _tool_consultar_compras(arguments)
+        if name == 'buscar_compra':                 return _tool_buscar_compra(arguments)
+        if name == 'resumen_compras':               return _tool_resumen_compras(arguments)
+        if name == 'consultar_socios':              return _tool_consultar_socios(arguments)
         return f'Herramienta desconocida: {name}'
     except Exception as e:
         return f'Error al ejecutar {name}: {str(e)}'
@@ -396,7 +419,7 @@ def _call_tool(name, arguments):
 # MCP JSON-RPC
 # ---------------------------------------------------------------------------
 
-def _handle_mcp(body_bytes):
+def _handle_mcp(body_bytes, environ):
     try:
         req = json.loads(body_bytes)
     except Exception:
@@ -405,6 +428,14 @@ def _handle_mcp(body_bytes):
     method = req.get('method', '')
     params = req.get('params') or {}
     req_id = req.get('id')
+
+    _log('mcp', {
+        'method': method,
+        'id': req_id,
+        'ip': environ.get('REMOTE_ADDR', ''),
+        'ua': environ.get('HTTP_USER_AGENT', '')[:120],
+        'params_keys': list(params.keys()) if isinstance(params, dict) else [],
+    })
 
     if req_id is None and method.startswith('notifications/'):
         return None
@@ -418,50 +449,57 @@ def _handle_mcp(body_bytes):
     if method == 'tools/list':
         return {'jsonrpc': '2.0', 'id': req_id, 'result': {'tools': TOOLS}}
     if method == 'tools/call':
+        tool_name = params.get('name', '')
+        arguments = params.get('arguments') or {}
+        _log('tool_call', {'name': tool_name, 'arguments': arguments})
+        result_text = _call_tool(tool_name, arguments)
         return {'jsonrpc': '2.0', 'id': req_id, 'result': {
-            'content': [{'type': 'text', 'text': _call_tool(params.get('name', ''), params.get('arguments') or {})}],
+            'content': [{'type': 'text', 'text': result_text}],
             'isError': False,
         }}
     if method == 'ping':
         return {'jsonrpc': '2.0', 'id': req_id, 'result': {}}
 
-    return {'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32601, 'message': f'Method not found: {method}'}}
+    return {'jsonrpc': '2.0', 'id': req_id,
+            'error': {'code': -32601, 'message': f'Method not found: {method}'}}
 
 
 # ---------------------------------------------------------------------------
 # WSGI helpers
 # ---------------------------------------------------------------------------
 
-def _parse_query(qs):
-    params = {}
+def _parse_qs(qs):
+    out = {}
     for part in (qs or '').split('&'):
         if '=' in part:
             k, v = part.split('=', 1)
-            params[urllib.parse.unquote_plus(k)] = urllib.parse.unquote_plus(v)
-    return params
+            out[urllib.parse.unquote_plus(k)] = urllib.parse.unquote_plus(v)
+    return out
 
 
-def _parse_body(environ):
+def _read_body(environ):
     try:
-        length = int(environ.get('CONTENT_LENGTH') or 0)
-        return environ['wsgi.input'].read(length) if length > 0 else b''
+        n = int(environ.get('CONTENT_LENGTH') or 0)
+        return environ['wsgi.input'].read(n) if n > 0 else b''
     except Exception:
         return b''
 
 
-def _json_resp(start_response, status, data, extra_headers=None):
-    body = json.dumps(data, ensure_ascii=False).encode('utf-8')
-    headers = [('Content-Type', 'application/json; charset=utf-8'),
-               ('Content-Length', str(len(body))), ('Cache-Control', 'no-store')]
-    if extra_headers:
-        headers.extend(extra_headers)
-    start_response(status, headers)
+def _json(start_response, status, data, extra=None):
+    body = json.dumps(data, cls=_Enc, ensure_ascii=False).encode('utf-8')
+    hdrs = [('Content-Type', 'application/json; charset=utf-8'),
+            ('Content-Length', str(len(body))),
+            ('Cache-Control', 'no-store')]
+    if extra:
+        hdrs.extend(extra)
+    start_response(status, hdrs)
     return [body]
 
 
-def _html_resp(start_response, status, html):
-    body = html.encode('utf-8')
-    start_response(status, [('Content-Type', 'text/html; charset=utf-8'), ('Content-Length', str(len(body)))])
+def _html(start_response, html_str):
+    body = html_str.encode('utf-8')
+    start_response('200 OK', [('Content-Type', 'text/html; charset=utf-8'),
+                               ('Content-Length', str(len(body)))])
     return [body]
 
 
@@ -472,173 +510,211 @@ def _html_resp(start_response, status, html):
 def application(environ, start_response):
     path   = environ.get('PATH_INFO', '/')
     method = environ.get('REQUEST_METHOD', 'GET')
-    params = _parse_query(environ.get('QUERY_STRING', ''))
+    qs     = _parse_qs(environ.get('QUERY_STRING', ''))
 
     # ── Health ──────────────────────────────────────────────────────────────
     if path == '/health':
-        return _json_resp(start_response, '200 OK', {
-            'status': 'ok', 'service': SERVER_NAME, 'version': SERVER_VERSION,
-            'language': 'Python 3',
-            'db': 'pymysql disponible' if DB_AVAILABLE else 'pymysql NO instalado',
-            'oauth': 'configurado' if OAUTH_CLIENT_ID else 'sin configurar',
+        return _json(start_response, '200 OK', {
+            'status':  'ok',
+            'service': SERVER_NAME,
+            'version': SERVER_VERSION,
+            'db':      'pymysql disponible' if DB_AVAILABLE else 'pymysql NO instalado',
+            'oauth':   'configurado' if OAUTH_CLIENT_ID else 'sin configurar',
+            'base_url': BASE_URL,
         })
+
+    # ── Log viewer ──────────────────────────────────────────────────────────
+    if path == '/log':
+        if qs.get('token') != RELOAD_TOKEN:
+            return _json(start_response, '401 Unauthorized', {'error': 'Token requerido'})
+        with _log_lock:
+            entries = list(_log_entries)
+        if qs.get('fmt') == 'html':
+            rows = ''.join(
+                f'<tr><td>{e["t"]}</td><td><b>{e["tag"]}</b></td>'
+                f'<td><pre>{json.dumps(e["data"], ensure_ascii=False, indent=2)}</pre></td></tr>'
+                for e in reversed(entries)
+            )
+            html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Log — {SERVER_NAME}</title>
+<style>body{{font-family:monospace;font-size:13px;background:#111;color:#eee;padding:16px}}
+table{{border-collapse:collapse;width:100%}}
+td{{border:1px solid #333;padding:6px 10px;vertical-align:top}}
+td:first-child{{white-space:nowrap;color:#aaa}} b{{color:#7cf}}
+pre{{margin:0;white-space:pre-wrap;word-break:break-all}}</style></head>
+<body><h2>{SERVER_NAME} v{SERVER_VERSION} — Request Log ({len(entries)} entradas)</h2>
+<table>{rows}</table></body></html>"""
+            return _html(start_response, html)
+        return _json(start_response, '200 OK', entries)
 
     # ── Reload ──────────────────────────────────────────────────────────────
     if path == '/reload':
-        if not RELOAD_TOKEN or params.get('token') != RELOAD_TOKEN:
-            return _json_resp(start_response, '401 Unauthorized', {'error': 'Token inválido'})
+        if not RELOAD_TOKEN or qs.get('token') != RELOAD_TOKEN:
+            return _json(start_response, '401 Unauthorized', {'error': 'Token inválido'})
+        _log('reload', {'ip': environ.get('REMOTE_ADDR', '')})
         def _exit():
-            import time as _t; _t.sleep(0.5); os._exit(0)
+            import time as _t
+            _t.sleep(0.5)
+            os._exit(0)
         threading.Thread(target=_exit, daemon=True).start()
-        return _json_resp(start_response, '200 OK', {'mensaje': 'Reiniciando proceso...'})
+        return _json(start_response, '200 OK', {'mensaje': 'Reiniciando proceso...'})
 
-    # ── Debug log ────────────────────────────────────────────────────────────
-    if path == '/debug':
-        with _debug_lock:
-            log_copy = list(_debug_log)
-        return _json_resp(start_response, '200 OK', log_copy)
-
-    # ── OAuth discovery (RFC 8414 + OpenID alias) ────────────────────────────
+    # ── OAuth discovery ──────────────────────────────────────────────────────
     if path in ('/.well-known/oauth-authorization-server', '/.well-known/openid-configuration'):
-        _log('discovery', {'method': method, 'path': path})
-        meta = {
+        _log_request(environ, 'oauth_discovery')
+        return _json(start_response, '200 OK', {
             'issuer': BASE_URL,
             'authorization_endpoint': f'{BASE_URL}/oauth/authorize',
-            'token_endpoint': f'{BASE_URL}/oauth/token',
-            'registration_endpoint': f'{BASE_URL}/oauth/register',
-            'response_types_supported': ['code'],
-            'grant_types_supported': ['authorization_code'],
-            'code_challenge_methods_supported': ['S256'],
+            'token_endpoint':         f'{BASE_URL}/oauth/token',
+            'registration_endpoint':  f'{BASE_URL}/oauth/register',
+            'response_types_supported':            ['code'],
+            'grant_types_supported':               ['authorization_code'],
+            'code_challenge_methods_supported':    ['S256'],
             'token_endpoint_auth_methods_supported': ['client_secret_basic', 'client_secret_post'],
-        }
-        return _json_resp(start_response, '200 OK', meta)
+        })
 
-    # ── OAuth dynamic client registration (RFC 7591) ─────────────────────────
+    # ── OAuth register ───────────────────────────────────────────────────────
     if path == '/oauth/register' and method == 'POST':
-        body_raw = _parse_body(environ)
-        _log('register', {'body': body_raw.decode('utf-8', errors='replace')[:200]})
-        # Accept any registration — return pre-configured client credentials
-        return _json_resp(start_response, '201 Created', {
-            'client_id': OAUTH_CLIENT_ID,
-            'client_secret': OAUTH_CLIENT_SECRET,
-            'client_id_issued_at': int(time.time()),
+        body = _read_body(environ)
+        _log('oauth_register', {
+            'ip':   environ.get('REMOTE_ADDR', ''),
+            'body': body.decode('utf-8', errors='replace')[:500],
+            'ct':   environ.get('CONTENT_TYPE', ''),
+        })
+        return _json(start_response, '201 Created', {
+            'client_id':             OAUTH_CLIENT_ID,
+            'client_secret':         OAUTH_CLIENT_SECRET,
+            'client_id_issued_at':   int(time.time()),
             'client_secret_expires_at': 0,
             'token_endpoint_auth_method': 'client_secret_basic',
-            'grant_types': ['authorization_code'],
+            'grant_types':    ['authorization_code'],
             'response_types': ['code'],
         })
 
     # ── OAuth authorize ──────────────────────────────────────────────────────
     if path == '/oauth/authorize':
-        client_id      = params.get('client_id', '')
-        redirect_uri   = params.get('redirect_uri', '')
-        state          = params.get('state', '')
-        code_challenge = params.get('code_challenge', '')
-        _log('authorize', {'method': method, 'client_id': client_id, 'redirect_uri': redirect_uri, 'has_challenge': bool(code_challenge)})
+        client_id      = qs.get('client_id', '')
+        redirect_uri   = qs.get('redirect_uri', '')
+        state          = qs.get('state', '')
+        code_challenge = qs.get('code_challenge', '')
 
-        # Accept pre-configured client OR dynamically registered clients
+        _log('oauth_authorize', {
+            'method':       method,
+            'client_id':    client_id,
+            'redirect_uri': redirect_uri,
+            'state':        state[:20],
+            'has_challenge': bool(code_challenge),
+            'ip':           environ.get('REMOTE_ADDR', ''),
+            'ua':           environ.get('HTTP_USER_AGENT', '')[:80],
+        })
+
         if OAUTH_CLIENT_ID and client_id != OAUTH_CLIENT_ID:
-            return _json_resp(start_response, '400 Bad Request', {'error': 'invalid_client'})
+            return _json(start_response, '400 Bad Request', {'error': 'invalid_client'})
 
         if method == 'POST':
-            body_params = _parse_query(_parse_body(environ).decode('utf-8', errors='replace'))
-            action = body_params.get('action', '')
+            bp     = _parse_qs(_read_body(environ).decode('utf-8', errors='replace'))
+            action = bp.get('action', '')
+            _log('oauth_authorize_post', {'action': action})
             if action == 'approve':
                 code = _new_auth_code(client_id, redirect_uri, code_challenge)
-                sep = '&' if '?' in redirect_uri else '?'
-                location = f"{redirect_uri}{sep}code={urllib.parse.quote(code)}&state={urllib.parse.quote(state)}"
-                start_response('302 Found', [('Location', location), ('Cache-Control', 'no-store')])
+                sep  = '&' if '?' in redirect_uri else '?'
+                loc  = f"{redirect_uri}{sep}code={urllib.parse.quote(code)}&state={urllib.parse.quote(state)}"
+                start_response('302 Found', [('Location', loc), ('Cache-Control', 'no-store')])
                 return [b'']
             sep = '&' if '?' in redirect_uri else '?'
-            location = f"{redirect_uri}{sep}error=access_denied&state={urllib.parse.quote(state)}"
-            start_response('302 Found', [('Location', location)])
+            loc = f"{redirect_uri}{sep}error=access_denied&state={urllib.parse.quote(state)}"
+            start_response('302 Found', [('Location', loc)])
             return [b'']
 
         html = f"""<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8">
 <title>Corporativo C.A. — Autorizar acceso</title>
 <style>
-  body{{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}}
-  .card{{background:#fff;border-radius:12px;padding:40px;max-width:420px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,.1);text-align:center}}
-  h1{{font-size:1.4rem;margin:0 0 8px}}
-  p{{color:#555;margin:0 0 28px;font-size:.95rem}}
-  .logo{{font-size:2.5rem;margin-bottom:16px}}
-  .btn{{display:inline-block;padding:12px 32px;border:none;border-radius:8px;font-size:1rem;cursor:pointer;width:100%;margin-bottom:10px}}
-  .btn-primary{{background:#2563eb;color:#fff}}
-  .btn-secondary{{background:#e5e7eb;color:#374151}}
+body{{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
+     min-height:100vh;margin:0;background:#f5f5f5}}
+.card{{background:#fff;border-radius:12px;padding:40px;max-width:420px;width:90%;
+       box-shadow:0 4px 24px rgba(0,0,0,.1);text-align:center}}
+h1{{font-size:1.4rem;margin:0 0 8px}} p{{color:#555;margin:0 0 28px;font-size:.95rem}}
+.logo{{font-size:2.5rem;margin-bottom:16px}}
+.btn{{display:inline-block;padding:12px 32px;border:none;border-radius:8px;
+      font-size:1rem;cursor:pointer;width:100%;margin-bottom:10px}}
+.btn-primary{{background:#2563eb;color:#fff}} .btn-secondary{{background:#e5e7eb;color:#374151}}
 </style></head>
 <body><div class="card">
   <div class="logo">🏢</div>
   <h1>Corporativo C.A.</h1>
   <p>Claude solicita acceso a los datos corporativos de compras, socios y tasas de cambio.</p>
   <form method="POST" action="/oauth/authorize?client_id={urllib.parse.quote(client_id)}&redirect_uri={urllib.parse.quote(redirect_uri)}&state={urllib.parse.quote(state)}&code_challenge={urllib.parse.quote(code_challenge)}&code_challenge_method=S256">
-    <button class="btn btn-primary" name="action" value="approve">✅ Autorizar acceso</button>
+    <button class="btn btn-primary"   name="action" value="approve">✅ Autorizar acceso</button>
     <button class="btn btn-secondary" name="action" value="deny">Cancelar</button>
   </form>
 </div></body></html>"""
-        return _html_resp(start_response, '200 OK', html)
+        return _html(start_response, html)
 
     # ── OAuth token ──────────────────────────────────────────────────────────
     if path == '/oauth/token' and method == 'POST':
-        token_body_raw = _parse_body(environ)
-        body_params   = _parse_query(token_body_raw.decode('utf-8', errors='replace'))
-        grant_type    = body_params.get('grant_type', '')
-        code          = body_params.get('code', '')
-        code_verifier = body_params.get('code_verifier', '')
+        raw        = _read_body(environ)
+        bp         = _parse_qs(raw.decode('utf-8', errors='replace'))
+        grant_type    = bp.get('grant_type', '')
+        code          = bp.get('code', '')
+        code_verifier = bp.get('code_verifier', '')
+        client_id     = bp.get('client_id', '')
+        client_secret = bp.get('client_secret', '')
+        auth_hdr      = environ.get('HTTP_AUTHORIZATION', '')
+        auth_src      = 'body'
 
-        # Client credentials: body params OR HTTP Basic Auth header
-        client_id     = body_params.get('client_id', '')
-        client_secret = body_params.get('client_secret', '')
-        auth_header   = environ.get('HTTP_AUTHORIZATION', '')
-        auth_source   = 'body'
-        if auth_header.startswith('Basic '):
+        if auth_hdr.startswith('Basic '):
             try:
-                decoded = base64.b64decode(auth_header[6:]).decode('utf-8')
-                client_id, client_secret = decoded.split(':', 1)
+                dec = base64.b64decode(auth_hdr[6:]).decode('utf-8')
+                client_id, client_secret = dec.split(':', 1)
                 client_id     = urllib.parse.unquote_plus(client_id)
                 client_secret = urllib.parse.unquote_plus(client_secret)
-                auth_source   = 'basic'
+                auth_src = 'basic'
             except Exception:
                 pass
 
-        _log('token', {
-            'grant_type': grant_type,
-            'client_id': client_id,
-            'auth_source': auth_source,
-            'has_code': bool(code),
+        _log('oauth_token', {
+            'grant_type':  grant_type,
+            'client_id':   client_id,
+            'auth_src':    auth_src,
+            'has_code':    bool(code),
             'has_verifier': bool(code_verifier),
-            'body_keys': list(body_params.keys()),
-            'auth_header_prefix': auth_header[:20] if auth_header else '',
+            'body_keys':   list(bp.keys()),
+            'auth_prefix': auth_hdr[:30] if auth_hdr else '',
+            'ip':          environ.get('REMOTE_ADDR', ''),
         })
 
-        # Validate client
         if not client_id or not client_secret:
-            _log('token_err', {'reason': 'missing credentials'})
-            return _json_resp(start_response, '401 Unauthorized', {'error': 'invalid_client'})
+            _log('oauth_token_err', {'reason': 'missing credentials'})
+            return _json(start_response, '401 Unauthorized', {'error': 'invalid_client'})
+
         if not secrets.compare_digest(client_id.strip(), OAUTH_CLIENT_ID) or \
            not secrets.compare_digest(client_secret.strip(), OAUTH_CLIENT_SECRET):
-            _log('token_err', {'reason': 'invalid credentials', 'got_id': client_id})
-            return _json_resp(start_response, '401 Unauthorized', {'error': 'invalid_client'})
+            _log('oauth_token_err', {'reason': 'bad credentials', 'client_id': client_id})
+            return _json(start_response, '401 Unauthorized', {'error': 'invalid_client'})
 
         if grant_type != 'authorization_code':
-            return _json_resp(start_response, '400 Bad Request', {'error': 'unsupported_grant_type'})
+            return _json(start_response, '400 Bad Request', {'error': 'unsupported_grant_type'})
 
         with _oauth_lock:
             entry = _auth_codes.pop(code, None)
 
         if not entry or time.time() > entry['exp']:
-            return _json_resp(start_response, '400 Bad Request', {'error': 'invalid_grant'})
+            _log('oauth_token_err', {'reason': 'invalid or expired code'})
+            return _json(start_response, '400 Bad Request', {'error': 'invalid_grant'})
 
         if entry.get('code_challenge') and code_verifier:
             if not _verify_pkce(code_verifier, entry['code_challenge']):
-                return _json_resp(start_response, '400 Bad Request', {'error': 'invalid_grant'})
+                _log('oauth_token_err', {'reason': 'pkce mismatch'})
+                return _json(start_response, '400 Bad Request', {'error': 'invalid_grant'})
 
         token = _new_access_token(client_id)
-        return _json_resp(start_response, '200 OK', {
+        _log('oauth_token_ok', {'client_id': client_id})
+        return _json(start_response, '200 OK', {
             'access_token': token, 'token_type': 'Bearer', 'expires_in': 3600,
         })
 
-    # ── MCP endpoint ─────────────────────────────────────────────────────────
+    # ── MCP ─────────────────────────────────────────────────────────────────
     if path == '/mcp':
         if method == 'OPTIONS':
             start_response('204 No Content', [
@@ -650,25 +726,27 @@ def application(environ, start_response):
             return [b'']
 
         if method == 'POST':
-            # Require auth only if OAuth is configured
-            if OAUTH_CLIENT_ID and not _valid_token(_bearer(environ)):
-                return _json_resp(start_response, '401 Unauthorized',
-                                  {'error': 'invalid_token'},
-                                  [('WWW-Authenticate',
-                                    f'Bearer realm="{BASE_URL}"'),
-                                   ('Access-Control-Allow-Origin', '*')])
+            _log_request(environ, 'mcp_request')
 
-            body = _parse_body(environ) or b'{}'
-            result = _handle_mcp(body)
+            if OAUTH_CLIENT_ID and not _valid_token(_bearer(environ)):
+                _log('mcp_auth_fail', {'ip': environ.get('REMOTE_ADDR', ''),
+                                       'auth': environ.get('HTTP_AUTHORIZATION', '')[:40]})
+                return _json(start_response, '401 Unauthorized',
+                             {'error': 'invalid_token'},
+                             [('WWW-Authenticate', f'Bearer realm="{BASE_URL}"'),
+                              ('Access-Control-Allow-Origin', '*')])
+
+            body   = _read_body(environ) or b'{}'
+            result = _handle_mcp(body, environ)
             if result is None:
                 start_response('204 No Content', [('Content-Length', '0')])
                 return [b'']
-            resp_body = json.dumps(result, cls=_Enc, ensure_ascii=False).encode('utf-8')
+            resp = json.dumps(result, cls=_Enc, ensure_ascii=False).encode('utf-8')
             start_response('200 OK', [
                 ('Content-Type', 'application/json; charset=utf-8'),
-                ('Content-Length', str(len(resp_body))),
+                ('Content-Length', str(len(resp))),
                 ('Access-Control-Allow-Origin', '*'),
             ])
-            return [resp_body]
+            return [resp]
 
-    return _json_resp(start_response, '404 Not Found', {'error': 'Ruta no encontrada'})
+    return _json(start_response, '404 Not Found', {'error': 'Ruta no encontrada'})
