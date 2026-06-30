@@ -22,7 +22,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME         = 'corp-mcp-py'
-SERVER_VERSION      = '4.7.0'
+SERVER_VERSION      = '4.8.0'
 MCP_VERSION         = '2025-11-25'
 
 # ---------------------------------------------------------------------------
@@ -119,6 +119,11 @@ def _new_access_token(client_id):
 
 
 def _valid_token(token):
+    entry = _access_tokens.get(token)
+    if entry and time.time() < entry['exp']:
+        return True
+    # Token not in this worker's memory — reload from disk in case another worker issued it
+    _oauth_load()
     entry = _access_tokens.get(token)
     return bool(entry and time.time() < entry['exp'])
 
