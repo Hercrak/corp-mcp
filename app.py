@@ -22,7 +22,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME         = 'corp-mcp-py'
-SERVER_VERSION      = '4.9.0'
+SERVER_VERSION      = '4.10.0'
 MCP_VERSION         = '2025-11-25'
 
 # ---------------------------------------------------------------------------
@@ -524,7 +524,7 @@ def _tool_consultar_ventas(args):
     conn = _get_db()
     try:
         with conn.cursor() as cur:
-            cur.callproc('vnt', [
+            cur.execute('CALL vnt(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)', [
                 'PINTUADM',
                 'vntStd',
                 args.get('desde')          or None,
@@ -542,9 +542,7 @@ def _tool_consultar_ventas(args):
                 args.get('marca_desde')    or '',
                 args.get('marca_hasta')    or '',
             ])
-            rows = []
-            for result in cur.stored_results():
-                rows = result.fetchall()
+            rows = cur.fetchall()
     finally:
         conn.close()
 
