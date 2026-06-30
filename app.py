@@ -22,7 +22,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME         = 'corp-mcp-py'
-SERVER_VERSION      = '4.8.0'
+SERVER_VERSION      = '4.9.0'
 MCP_VERSION         = '2025-11-25'
 
 # ---------------------------------------------------------------------------
@@ -31,6 +31,7 @@ MCP_VERSION         = '2025-11-25'
 
 _log_entries = []
 _log_lock    = threading.Lock()
+_LOG_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mcp_requests.log')
 
 def _log(tag, data):
     entry = {
@@ -42,6 +43,11 @@ def _log(tag, data):
         _log_entries.append(entry)
         if len(_log_entries) > 100:
             _log_entries.pop(0)
+    try:
+        with open(_LOG_FILE, 'a') as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+    except Exception:
+        pass
 
 
 def _log_request(environ, tag='req'):
@@ -755,8 +761,19 @@ def application(environ, start_response):
     if path == '/log':
         if qs.get('token') != RELOAD_TOKEN:
             return _json(start_response, '401 Unauthorized', {'error': 'Token requerido'})
-        with _log_lock:
-            entries = list(_log_entries)
+        # Lee del archivo compartido (visible desde todos los workers)
+        file_entries = []
+        try:
+            with open(_LOG_FILE) as f:
+                lines = f.readlines()
+            for line in lines[-200:]:
+                try:
+                    file_entries.append(json.loads(line.strip()))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        entries = file_entries if file_entries else list(_log_entries)
         if qs.get('fmt') == 'html':
             rows = ''.join(
                 f'<tr><td>{e["t"]}</td><td><b>{e["tag"]}</b></td>'
