@@ -6,23 +6,20 @@ import secrets
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from datetime import date, datetime
 from decimal import Decimal
-
-try:
-    import pymysql
-    import pymysql.cursors
-    DB_AVAILABLE = True
-except ImportError:
-    DB_AVAILABLE = False
 
 RELOAD_TOKEN        = os.environ.get('RELOAD_TOKEN', '')
 OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
-SERVER_NAME         = 'corp-mcp-py'
-SERVER_VERSION      = '4.16.0'
+SERVER_NAME          = 'corp-mcp-py'
+SERVER_VERSION       = '4.17.0'
+API_BASE_URL         = os.environ.get('API_BASE_URL',  'https://api.pintuandes.com')
+API_INTERNAL_KEY     = os.environ.get('INTERNAL_KEY',  '')
 MCP_VERSION         = '2025-11-25'
 
 # ---------------------------------------------------------------------------
@@ -146,31 +143,23 @@ def _bearer(environ):
 
 
 # ---------------------------------------------------------------------------
-# Base de datos
+# Cliente HTTP hacia corp-api
 # ---------------------------------------------------------------------------
 
-def _get_db(database=None):
-    return pymysql.connect(
-        host=os.environ.get('DB_HOST', 'localhost'),
-        port=int(os.environ.get('DB_PORT', 3306)),
-        user=os.environ.get('DB_USER', ''),
-        password=os.environ.get('DB_PASSWORD', ''),
-        database=database or os.environ.get('DB_NAME', ''),
-        cursorclass=pymysql.cursors.DictCursor,
-        autocommit=True,
-        connect_timeout=10,
-    )
-
-
-def _query(sql, params=None):
-    conn = _get_db()
+def _api(path, params=None):
+    url = API_BASE_URL + path
+    if params:
+        clean = {k: str(v) for k, v in params.items() if v not in (None, '')}
+        if clean:
+            url += '?' + urllib.parse.urlencode(clean)
+    req = urllib.request.Request(url, headers={'X-Internal-Key': API_INTERNAL_KEY})
     try:
-        with conn.cursor() as cur:
-            cur.execute(sql, params or ())
-            return cur.fetchall()
-    finally:
-        conn.close()
-
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        return {'ok': False, 'error': f'API HTTP {e.code}'}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
 
 
 class _Enc(json.JSONEncoder):
@@ -281,34 +270,27 @@ TOOLS = [
 
 
 def _tool_consultar_ventas(args):
-    conn = _get_db()
-    try:
-        with conn.cursor() as cur:
-            cur.execute('CALL vnt(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)', [
-                'PINTUADM',
-                'vntStd',
-                args.get('desde')          or None,
-                args.get('hasta')          or None,
-                args.get('producto_desde') or '',
-                args.get('producto_hasta') or '',
-                args.get('almacen_desde')  or '',
-                args.get('almacen_hasta')  or '',
-                args.get('cliente_desde')  or '',
-                args.get('cliente_hasta')  or '',
-                args.get('vendedor_desde') or '',
-                args.get('vendedor_hasta') or '',
-                args.get('sucursal_desde') or '',
-                args.get('sucursal_hasta') or '',
-                args.get('marca_desde')    or '',
-                args.get('marca_hasta')    or '',
-            ])
-            rows = cur.fetchall()
-    finally:
-        conn.close()
-
+    result = _api('/ventas', {
+        'desde':          args.get('desde'),
+        'hasta':          args.get('hasta'),
+        'producto_desde': args.get('producto_desde'),
+        'producto_hasta': args.get('producto_hasta'),
+        'almacen_desde':  args.get('almacen_desde'),
+        'almacen_hasta':  args.get('almacen_hasta'),
+        'cliente_desde':  args.get('cliente_desde'),
+        'cliente_hasta':  args.get('cliente_hasta'),
+        'vendedor_desde': args.get('vendedor_desde'),
+        'vendedor_hasta': args.get('vendedor_hasta'),
+        'sucursal_desde': args.get('sucursal_desde'),
+        'sucursal_hasta': args.get('sucursal_hasta'),
+        'marca_desde':    args.get('marca_desde'),
+        'marca_hasta':    args.get('marca_hasta'),
+    })
+    if not result.get('ok'):
+        return f"Error: {result.get('error')}"
+    rows = result.get('data', [])
     if not rows:
         return 'No se encontraron ventas con los filtros indicados.'
-
     lines = [f'Estadística de ventas ({len(rows)} registros):',
              f'{"Mes":<12} {"Producto":<16} {"Almacén":<10} {"Cliente":<22} {"Vendedor":<20} '
              f'{"Cant.(Unid.)":>12} {"Monto (USD)":>12} {"Costo (USD)":>12}']
@@ -333,13 +315,10 @@ def _tool_consultar_ventas(args):
 
 
 def _tool_buscar_clientes(args):
-    t = f"%{args.get('buscar', '')}%"
-    limit = min(int(args.get('limite', 20)), 100)
-    rows = _query("""
-        SELECT TRIM(socCdg) AS socCdg, TRIM(socDsc) AS socDsc, socRif
-        FROM clt WHERE socCdg LIKE %s OR socDsc LIKE %s
-        ORDER BY socDsc LIMIT %s
-    """, [t, t, limit])
+    result = _api('/clientes', {'buscar': args.get('buscar', ''), 'limite': args.get('limite', 20)})
+    if not result.get('ok'):
+        return f"Error: {result.get('error')}"
+    rows = result.get('data', [])
     if not rows:
         return 'No se encontraron clientes con ese criterio.'
     lines = [f'Clientes encontrados ({len(rows)} registros):']
@@ -349,13 +328,10 @@ def _tool_buscar_clientes(args):
 
 
 def _tool_buscar_vendedores(args):
-    t = f"%{args.get('buscar', '')}%"
-    limit = min(int(args.get('limite', 20)), 100)
-    rows = _query("""
-        SELECT TRIM(socCdg) AS socCdg, TRIM(socDsc) AS socDsc
-        FROM vnd WHERE socCdg LIKE %s OR socDsc LIKE %s
-        ORDER BY socDsc LIMIT %s
-    """, [t, t, limit])
+    result = _api('/vendedores', {'buscar': args.get('buscar', ''), 'limite': args.get('limite', 20)})
+    if not result.get('ok'):
+        return f"Error: {result.get('error')}"
+    rows = result.get('data', [])
     if not rows:
         return 'No se encontraron vendedores con ese criterio.'
     lines = [f'Vendedores encontrados ({len(rows)} registros):']
@@ -365,13 +341,10 @@ def _tool_buscar_vendedores(args):
 
 
 def _tool_buscar_productos(args):
-    t = f"%{args.get('buscar', '')}%"
-    limit = min(int(args.get('limite', 20)), 100)
-    rows = _query("""
-        SELECT TRIM(prdCdg) AS prdCdg, TRIM(prdDsc) AS prdDsc, TRIM(mrcCdg) AS mrcCdg
-        FROM prd WHERE prdCdg LIKE %s OR prdDsc LIKE %s
-        ORDER BY prdDsc LIMIT %s
-    """, [t, t, limit])
+    result = _api('/productos', {'buscar': args.get('buscar', ''), 'limite': args.get('limite', 20)})
+    if not result.get('ok'):
+        return f"Error: {result.get('error')}"
+    rows = result.get('data', [])
     if not rows:
         return 'No se encontraron productos con ese criterio.'
     lines = [f'Productos encontrados ({len(rows)} registros):']
@@ -381,8 +354,6 @@ def _tool_buscar_productos(args):
 
 
 def _call_tool(name, arguments):
-    if not DB_AVAILABLE:
-        return 'Error: PyMySQL no está instalado.'
     try:
         if name == 'consultar_ventas':              return _tool_consultar_ventas(arguments)
         if name == 'buscar_clientes':               return _tool_buscar_clientes(arguments)
@@ -502,7 +473,7 @@ def application(environ, start_response):
             'status':  'ok',
             'service': SERVER_NAME,
             'version': SERVER_VERSION,
-            'db':      'pymysql disponible' if DB_AVAILABLE else 'pymysql NO instalado',
+            'api':     API_BASE_URL,
             'oauth':   'configurado' if OAUTH_CLIENT_ID else 'sin configurar',
             'base_url': BASE_URL,
         })
