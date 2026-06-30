@@ -22,7 +22,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME         = 'corp-mcp-py'
-SERVER_VERSION      = '4.12.0'
+SERVER_VERSION      = '4.13.0'
 MCP_VERSION         = '2025-11-25'
 
 # ---------------------------------------------------------------------------
@@ -1029,7 +1029,8 @@ h1{{font-size:1.4rem;margin:0 0 8px}} p{{color:#555;margin:0 0 28px;font-size:.9
                 'preview': body[:300].decode('utf-8', errors='replace'),
             })
 
-            if OAUTH_CLIENT_ID and not _valid_token(_bearer(environ)):
+            bearer = _bearer(environ)
+            if OAUTH_CLIENT_ID and not _valid_token(bearer):
                 _log('mcp_auth_fail', {'ip': environ.get('REMOTE_ADDR', ''),
                                        'auth': environ.get('HTTP_AUTHORIZATION', '')[:40]})
                 return _json(start_response, '401 Unauthorized',
@@ -1039,6 +1040,21 @@ h1{{font-size:1.4rem;margin:0 0 8px}} p{{color:#555;margin:0 0 28px;font-size:.9
 
             body   = body or b'{}'
             result = _handle_mcp(body, environ)
+
+            # Auditoría: registra IP y método en cada acceso autenticado
+            try:
+                req_data = json.loads(body)
+                method   = req_data.get('method', '')
+                tool     = (req_data.get('params') or {}).get('name', '') if method == 'tools/call' else ''
+                _log('audit', {
+                    'ip':     environ.get('REMOTE_ADDR', ''),
+                    'ua':     environ.get('HTTP_USER_AGENT', '')[:60],
+                    'method': method,
+                    'tool':   tool,
+                    'token':  (bearer or '')[:8] + '…',
+                })
+            except Exception:
+                pass
             if result is None:
                 start_response('204 No Content', [('Content-Length', '0')])
                 return [b'']
