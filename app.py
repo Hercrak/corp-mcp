@@ -22,7 +22,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME         = 'corp-mcp-py'
-SERVER_VERSION      = '4.13.0'
+SERVER_VERSION      = '4.14.0'
 MCP_VERSION         = '2025-11-25'
 
 # ---------------------------------------------------------------------------
@@ -149,13 +149,13 @@ def _bearer(environ):
 # Base de datos
 # ---------------------------------------------------------------------------
 
-def _get_db():
+def _get_db(database=None):
     return pymysql.connect(
         host=os.environ.get('DB_HOST', 'localhost'),
         port=int(os.environ.get('DB_PORT', 3306)),
         user=os.environ.get('DB_USER', ''),
         password=os.environ.get('DB_PASSWORD', ''),
-        database=os.environ.get('DB_NAME', ''),
+        database=database or os.environ.get('DB_NAME', ''),
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=True,
         connect_timeout=10,
@@ -170,6 +170,22 @@ def _query(sql, params=None):
             return cur.fetchall()
     finally:
         conn.close()
+
+
+def _db_audit(ip, method, tool, ua, status, ms, token_prefix):
+    """Escribe en mcpAdmin.log en un hilo separado para no bloquear la respuesta."""
+    def _write():
+        try:
+            conn = _get_db('mcpAdmin')
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO log (logIp, logMet, logTool, logUa, logSts, logMs, logTok)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (ip, method, tool or None, ua or None, status, ms or None, token_prefix or None))
+            conn.close()
+        except Exception:
+            pass
+    threading.Thread(target=_write, daemon=True).start()
 
 
 class _Enc(json.JSONEncoder):
@@ -1039,20 +1055,21 @@ h1{{font-size:1.4rem;margin:0 0 8px}} p{{color:#555;margin:0 0 28px;font-size:.9
                               ('Access-Control-Allow-Origin', '*')])
 
             body   = body or b'{}'
+            t0     = time.time()
             result = _handle_mcp(body, environ)
+            ms     = int((time.time() - t0) * 1000)
 
-            # Auditoría: registra IP y método en cada acceso autenticado
+            # Auditoría: registra en log de texto y en mcpAdmin.log
             try:
-                req_data = json.loads(body)
-                method   = req_data.get('method', '')
-                tool     = (req_data.get('params') or {}).get('name', '') if method == 'tools/call' else ''
-                _log('audit', {
-                    'ip':     environ.get('REMOTE_ADDR', ''),
-                    'ua':     environ.get('HTTP_USER_AGENT', '')[:60],
-                    'method': method,
-                    'tool':   tool,
-                    'token':  (bearer or '')[:8] + '…',
-                })
+                req_data     = json.loads(body)
+                mcp_method   = req_data.get('method', '')
+                mcp_tool     = (req_data.get('params') or {}).get('name', '') if mcp_method == 'tools/call' else ''
+                ip           = environ.get('REMOTE_ADDR', '')
+                ua           = environ.get('HTTP_USER_AGENT', '')[:120]
+                token_prefix = (bearer or '')[:8] + '…'
+                _log('audit', {'ip': ip, 'ua': ua[:60], 'method': mcp_method,
+                               'tool': mcp_tool, 'token': token_prefix, 'ms': ms})
+                _db_audit(ip, mcp_method, mcp_tool, ua, 'ok', ms, token_prefix)
             except Exception:
                 pass
             if result is None:
