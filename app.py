@@ -22,7 +22,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME         = 'corp-mcp-py'
-SERVER_VERSION      = '4.6.0'
+SERVER_VERSION      = '4.7.0'
 MCP_VERSION         = '2025-11-25'
 
 # ---------------------------------------------------------------------------
@@ -113,7 +113,7 @@ def _new_access_token(client_id):
     _clean_expired()
     token = secrets.token_urlsafe(40)
     with _oauth_lock:
-        _access_tokens[token] = {'client_id': client_id, 'exp': time.time() + 3600}
+        _access_tokens[token] = {'client_id': client_id, 'exp': time.time() + 31536000}
         _oauth_save()
     return token
 
@@ -931,7 +931,7 @@ h1{{font-size:1.4rem;margin:0 0 8px}} p{{color:#555;margin:0 0 28px;font-size:.9
             token = _new_access_token(client_id)
             _log('oauth_token_ok', {'client_id': client_id, 'grant': 'client_credentials'})
             return _json(start_response, '200 OK', {
-                'access_token': token, 'token_type': 'Bearer', 'expires_in': 3600,
+                'access_token': token, 'token_type': 'Bearer', 'expires_in': 31536000,
             })
 
         if grant_type != 'authorization_code':
@@ -952,7 +952,7 @@ h1{{font-size:1.4rem;margin:0 0 8px}} p{{color:#555;margin:0 0 28px;font-size:.9
         token = _new_access_token(client_id)
         _log('oauth_token_ok', {'client_id': client_id})
         return _json(start_response, '200 OK', {
-            'access_token': token, 'token_type': 'Bearer', 'expires_in': 3600,
+            'access_token': token, 'token_type': 'Bearer', 'expires_in': 31536000,
         })
 
     # ── MCP ─────────────────────────────────────────────────────────────────
