@@ -22,7 +22,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME         = 'corp-mcp-py'
-SERVER_VERSION      = '4.14.0'
+SERVER_VERSION      = '4.15.0'
 MCP_VERSION         = '2025-11-25'
 
 # ---------------------------------------------------------------------------
@@ -171,21 +171,6 @@ def _query(sql, params=None):
     finally:
         conn.close()
 
-
-def _db_audit(ip, method, tool, ua, status, ms, token_prefix):
-    """Escribe en mcpAdmin.log en un hilo separado para no bloquear la respuesta."""
-    def _write():
-        try:
-            conn = _get_db('mcpAdmin')
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO log (logIp, logMet, logTool, logUa, logSts, logMs, logTok)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (ip, method, tool or None, ua or None, status, ms or None, token_prefix or None))
-            conn.close()
-        except Exception:
-            pass
-    threading.Thread(target=_write, daemon=True).start()
 
 
 class _Enc(json.JSONEncoder):
@@ -1059,7 +1044,6 @@ h1{{font-size:1.4rem;margin:0 0 8px}} p{{color:#555;margin:0 0 28px;font-size:.9
             result = _handle_mcp(body, environ)
             ms     = int((time.time() - t0) * 1000)
 
-            # Auditoría: registra en log de texto y en mcpAdmin.log
             try:
                 req_data     = json.loads(body)
                 mcp_method   = req_data.get('method', '')
@@ -1069,7 +1053,6 @@ h1{{font-size:1.4rem;margin:0 0 8px}} p{{color:#555;margin:0 0 28px;font-size:.9
                 token_prefix = (bearer or '')[:8] + '…'
                 _log('audit', {'ip': ip, 'ua': ua[:60], 'method': mcp_method,
                                'tool': mcp_tool, 'token': token_prefix, 'ms': ms})
-                _db_audit(ip, mcp_method, mcp_tool, ua, 'ok', ms, token_prefix)
             except Exception:
                 pass
             if result is None:
