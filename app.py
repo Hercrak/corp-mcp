@@ -22,7 +22,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME         = 'corp-mcp-py'
-SERVER_VERSION      = '4.11.0'
+SERVER_VERSION      = '4.12.0'
 MCP_VERSION         = '2025-11-25'
 
 # ---------------------------------------------------------------------------
@@ -808,14 +808,23 @@ pre{{margin:0;white-space:pre-wrap;word-break:break-all}}</style></head>
             return _json(start_response, '401 Unauthorized', {'error': 'Token inválido'})
         _log('deploy', {'ip': environ.get('REMOTE_ADDR', '')})
         app_dir = os.path.dirname(os.path.abspath(__file__))
+        REPO_URL = 'https://github.com/Hercrak/corp-mcp.git'
         output = []
-        # Sincronizar desde GitHub (sobreescribe cambios manuales locales)
-        for cmd in [
-            ['git', 'fetch', 'origin', 'main'],
-            ['git', 'reset', '--hard', 'origin/main'],
-        ]:
+
+        def _run(cmd):
             r = subprocess.run(cmd, cwd=app_dir, capture_output=True, text=True, timeout=30)
-            output.append(f"$ {' '.join(cmd)}\n{r.stdout}{r.stderr}".strip())
+            output.append(f"$ {' '.join(cmd)}\n{(r.stdout + r.stderr).strip()}")
+            return r.returncode
+
+        # Inicializar git si no existe .git en el directorio
+        if not os.path.exists(os.path.join(app_dir, '.git')):
+            _run(['git', 'init'])
+            _run(['git', 'remote', 'add', 'origin', REPO_URL])
+
+        # Sincronizar desde GitHub (sobreescribe cualquier cambio local)
+        _run(['git', 'fetch', 'origin', 'main'])
+        _run(['git', 'reset', '--hard', 'origin/main'])
+
         # Señalar a Passenger que reinicie en la próxima petición
         try:
             restart = os.path.join(app_dir, 'tmp', 'restart.txt')
@@ -825,6 +834,7 @@ pre{{margin:0;white-space:pre-wrap;word-break:break-all}}</style></head>
             output.append('tmp/restart.txt actualizado — Passenger reiniciará en la próxima petición')
         except Exception as e:
             output.append(f'restart.txt error: {e}')
+
         return _json(start_response, '200 OK', {'deploy': '\n\n'.join(output)})
 
     # ── OAuth Protected Resource Metadata (RFC 9728) — nuevo estándar MCP 2025
