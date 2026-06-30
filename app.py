@@ -22,7 +22,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME         = 'corp-mcp-py'
-SERVER_VERSION      = '4.10.0'
+SERVER_VERSION      = '4.11.0'
 MCP_VERSION         = '2025-11-25'
 
 # ---------------------------------------------------------------------------
@@ -801,6 +801,31 @@ pre{{margin:0;white-space:pre-wrap;word-break:break-all}}</style></head>
             os._exit(0)
         threading.Thread(target=_exit, daemon=True).start()
         return _json(start_response, '200 OK', {'mensaje': 'Reiniciando proceso...'})
+
+    # ── Deploy desde GitHub ──────────────────────────────────────────────────
+    if path == '/deploy':
+        if not RELOAD_TOKEN or qs.get('token') != RELOAD_TOKEN:
+            return _json(start_response, '401 Unauthorized', {'error': 'Token inválido'})
+        _log('deploy', {'ip': environ.get('REMOTE_ADDR', '')})
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        output = []
+        # Sincronizar desde GitHub (sobreescribe cambios manuales locales)
+        for cmd in [
+            ['git', 'fetch', 'origin', 'main'],
+            ['git', 'reset', '--hard', 'origin/main'],
+        ]:
+            r = subprocess.run(cmd, cwd=app_dir, capture_output=True, text=True, timeout=30)
+            output.append(f"$ {' '.join(cmd)}\n{r.stdout}{r.stderr}".strip())
+        # Señalar a Passenger que reinicie en la próxima petición
+        try:
+            restart = os.path.join(app_dir, 'tmp', 'restart.txt')
+            os.makedirs(os.path.dirname(restart), exist_ok=True)
+            with open(restart, 'w') as f:
+                f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+            output.append('tmp/restart.txt actualizado — Passenger reiniciará en la próxima petición')
+        except Exception as e:
+            output.append(f'restart.txt error: {e}')
+        return _json(start_response, '200 OK', {'deploy': '\n\n'.join(output)})
 
     # ── OAuth Protected Resource Metadata (RFC 9728) — nuevo estándar MCP 2025
     if path in ('/.well-known/oauth-protected-resource',
