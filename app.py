@@ -10,85 +10,6 @@ import urllib.parse
 from datetime import date, datetime
 from decimal import Decimal
 
-_FAVICON = base64.b64decode(
-    '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'
-    'SUVORK5CYII='
-)
-
 try:
     import pymysql
     import pymysql.cursors
@@ -101,7 +22,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME         = 'corp-mcp-py'
-SERVER_VERSION      = '4.16.0'
+SERVER_VERSION      = '4.15.0'
 MCP_VERSION         = '2025-11-25'
 
 # ---------------------------------------------------------------------------
@@ -823,13 +744,6 @@ def application(environ, start_response):
         'ip': environ.get('REMOTE_ADDR', ''),
         'ua': environ.get('HTTP_USER_AGENT', '')[:80],
     })
-
-    # ── Favicon ─────────────────────────────────────────────────────────────
-    if path == '/favicon.ico':
-        start_response('200 OK', [('Content-Type', 'image/png'),
-                                   ('Content-Length', str(len(_FAVICON))),
-                                   ('Cache-Control', 'max-age=86400')])
-        return [_FAVICON]
 
     # ── Health ──────────────────────────────────────────────────────────────
     if path == '/health':
