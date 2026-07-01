@@ -17,7 +17,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME          = 'corp-mcp-py'
-SERVER_VERSION       = '4.17.0'
+SERVER_VERSION       = '4.18.0'
 API_BASE_URL         = os.environ.get('API_BASE_URL',  'https://api.pintuandes.com')
 API_INTERNAL_KEY     = os.environ.get('INTERNAL_KEY',  '')
 MCP_VERSION         = '2025-11-25'
@@ -140,6 +140,123 @@ def _verify_pkce(verifier, challenge):
 def _bearer(environ):
     auth = environ.get('HTTP_AUTHORIZATION', '')
     return auth[7:] if auth.startswith('Bearer ') else None
+
+
+# ---------------------------------------------------------------------------
+# Login de usuario contra corp-api (para OAuth authorize)
+# ---------------------------------------------------------------------------
+
+def _validate_user_login(cod, pwd):
+    """Valida credenciales contra corp-api. Retorna dict de usuario o None."""
+    try:
+        body = json.dumps({'cod': cod, 'pwd': pwd}).encode('utf-8')
+        req  = urllib.request.Request(
+            API_BASE_URL + '/auth/login',
+            data=body,
+            headers={'Content-Type': 'application/json; charset=utf-8'},
+            method='POST',
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+            return data.get('usuario') if data.get('ok') else None
+    except Exception:
+        return None
+
+
+def _proof_make(cod):
+    """Genera token HMAC firmado para confirmar login en el paso de autorización."""
+    exp = int(time.time()) + 600
+    msg = f"{cod}|{exp}".encode()
+    sig = hmac.new(RELOAD_TOKEN.encode(), msg, hashlib.sha256).hexdigest()
+    return f"{cod}|{exp}|{sig}"
+
+
+def _proof_verify(proof):
+    """Verifica token HMAC. Retorna cod de usuario o None si inválido/expirado."""
+    try:
+        cod, exp_str, sig = proof.split('|')
+        msg      = f"{cod}|{exp_str}".encode()
+        expected = hmac.new(RELOAD_TOKEN.encode(), msg, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        if time.time() > int(exp_str):
+            return None
+        return cod
+    except Exception:
+        return None
+
+
+_OAUTH_CSS = """
+body{font-family:system-ui,sans-serif;display:flex;align-items:center;
+     justify-content:center;min-height:100vh;margin:0;background:#f1f5f9}
+.card{background:#fff;border-radius:14px;padding:40px 36px;max-width:380px;
+      width:90%;box-shadow:0 4px 28px rgba(0,0,0,.10);text-align:center}
+.logo{font-size:2.2rem;margin-bottom:12px}
+h1{font-size:1.25rem;color:#0f172a;margin:0 0 4px;font-weight:700}
+.sub{color:#6b7280;font-size:.88rem;margin:0 0 22px}
+label{display:block;text-align:left;font-size:.82rem;font-weight:600;
+      color:#374151;margin-bottom:4px}
+.inp{width:100%;padding:10px 13px;border:1.5px solid #d1d5db;border-radius:8px;
+     font-size:.95rem;margin-bottom:14px;box-sizing:border-box;transition:.2s}
+.inp:focus{outline:none;border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+.btn{display:block;width:100%;padding:11px;border:none;border-radius:8px;
+     font-size:.95rem;cursor:pointer;margin-bottom:10px;font-weight:600;transition:.15s}
+.btn-primary{background:#2563eb;color:#fff}
+.btn-primary:hover{background:#1d4ed8}
+.btn-secondary{background:#f1f5f9;color:#374151}
+.btn-secondary:hover{background:#e2e8f0}
+.error{background:#fef2f2;border:1px solid #fca5a5;color:#b91c1c;
+       border-radius:7px;padding:9px 12px;margin-bottom:14px;font-size:.87rem}
+.ok-box{background:#f0fdf4;border:1px solid #86efac;border-radius:8px;
+        padding:12px;margin-bottom:18px;color:#166534;font-size:.88rem;line-height:1.5}
+"""
+
+
+def _html_login(action_url, error=''):
+    err = f'<div class="error">⚠ {error}</div>' if error else ''
+    return f"""<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<title>Corporativo C.A. — Acceso</title>
+<style>{_OAUTH_CSS}</style></head>
+<body><div class="card">
+  <div class="logo">🏢</div>
+  <h1>Corporativo C.A.</h1>
+  <p class="sub">Ingresa tus credenciales para conectar Claude AI</p>
+  {err}
+  <form method="POST" action="{action_url}">
+    <label>Usuario</label>
+    <input class="inp" type="text" name="cod" placeholder="Código de usuario"
+           autocomplete="username" required autofocus>
+    <label>Contraseña</label>
+    <input class="inp" type="password" name="pwd" placeholder="Contraseña"
+           autocomplete="current-password" required>
+    <input type="hidden" name="action" value="login">
+    <button class="btn btn-primary" type="submit">Ingresar →</button>
+  </form>
+</div></body></html>"""
+
+
+def _html_approve(action_url, usuario, proof):
+    nomb = usuario.get('nomb', '')
+    rol  = usuario.get('rol', '').capitalize()
+    return f"""<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<title>Corporativo C.A. — Autorizar</title>
+<style>{_OAUTH_CSS}</style></head>
+<body><div class="card">
+  <div class="logo">🏢</div>
+  <h1>Corporativo C.A.</h1>
+  <div class="ok-box">
+    ✅ Bienvenido, <strong>{nomb}</strong><br>
+    <span style="color:#4b5563">Rol: {rol}</span>
+  </div>
+  <p class="sub">Claude AI solicita acceso a los datos corporativos con tu cuenta.</p>
+  <form method="POST" action="{action_url}">
+    <input type="hidden" name="auth_proof" value="{proof}">
+    <button class="btn btn-primary"   name="action" value="approve">✅ Autorizar acceso</button>
+    <button class="btn btn-secondary" name="action" value="deny">Cancelar</button>
+  </form>
+</div></body></html>"""
 
 
 # ---------------------------------------------------------------------------
@@ -623,45 +740,50 @@ pre{{margin:0;white-space:pre-wrap;word-break:break-all}}</style></head>
         if OAUTH_CLIENT_ID and client_id != OAUTH_CLIENT_ID:
             return _json(start_response, '400 Bad Request', {'error': 'invalid_client'})
 
+        action_url = (
+            f"/oauth/authorize"
+            f"?client_id={urllib.parse.quote(client_id)}"
+            f"&redirect_uri={urllib.parse.quote(redirect_uri)}"
+            f"&state={urllib.parse.quote(state)}"
+            f"&code_challenge={urllib.parse.quote(code_challenge)}"
+            f"&code_challenge_method=S256"
+        )
+
         if method == 'POST':
             bp     = _parse_qs(_read_body(environ).decode('utf-8', errors='replace'))
             action = bp.get('action', '')
             _log('oauth_authorize_post', {'action': action})
+
+            if action == 'deny':
+                sep = '&' if '?' in redirect_uri else '?'
+                loc = f"{redirect_uri}{sep}error=access_denied&state={urllib.parse.quote(state)}"
+                start_response('302 Found', [('Location', loc)])
+                return [b'']
+
+            if action == 'login':
+                cod = (bp.get('cod') or '').strip()
+                pwd = (bp.get('pwd') or '').strip()
+                usuario = _validate_user_login(cod, pwd) if cod and pwd else None
+                if not usuario:
+                    return _html(start_response,
+                                 _html_login(action_url, 'Usuario o contraseña incorrectos'))
+                proof = _proof_make(usuario['cod'])
+                _log('oauth_login_ok', {'cod': usuario['cod'], 'ip': environ.get('REMOTE_ADDR', '')})
+                return _html(start_response, _html_approve(action_url, usuario, proof))
+
             if action == 'approve':
+                cod = _proof_verify(bp.get('auth_proof', ''))
+                if not cod:
+                    return _html(start_response,
+                                 _html_login(action_url, 'Sesión expirada. Ingresa nuevamente.'))
                 code = _new_auth_code(client_id, redirect_uri, code_challenge)
+                _log('oauth_approved', {'cod': cod, 'ip': environ.get('REMOTE_ADDR', '')})
                 sep  = '&' if '?' in redirect_uri else '?'
                 loc  = f"{redirect_uri}{sep}code={urllib.parse.quote(code)}&state={urllib.parse.quote(state)}"
                 start_response('302 Found', [('Location', loc), ('Cache-Control', 'no-store')])
                 return [b'']
-            sep = '&' if '?' in redirect_uri else '?'
-            loc = f"{redirect_uri}{sep}error=access_denied&state={urllib.parse.quote(state)}"
-            start_response('302 Found', [('Location', loc)])
-            return [b'']
 
-        html = f"""<!DOCTYPE html>
-<html lang="es"><head><meta charset="utf-8">
-<title>Corporativo C.A. — Autorizar acceso</title>
-<style>
-body{{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
-     min-height:100vh;margin:0;background:#f5f5f5}}
-.card{{background:#fff;border-radius:12px;padding:40px;max-width:420px;width:90%;
-       box-shadow:0 4px 24px rgba(0,0,0,.1);text-align:center}}
-h1{{font-size:1.4rem;margin:0 0 8px}} p{{color:#555;margin:0 0 28px;font-size:.95rem}}
-.logo{{font-size:2.5rem;margin-bottom:16px}}
-.btn{{display:inline-block;padding:12px 32px;border:none;border-radius:8px;
-      font-size:1rem;cursor:pointer;width:100%;margin-bottom:10px}}
-.btn-primary{{background:#2563eb;color:#fff}} .btn-secondary{{background:#e5e7eb;color:#374151}}
-</style></head>
-<body><div class="card">
-  <div class="logo">🏢</div>
-  <h1>Corporativo C.A.</h1>
-  <p>Claude solicita acceso a los datos corporativos de compras, socios y tasas de cambio.</p>
-  <form method="POST" action="/oauth/authorize?client_id={urllib.parse.quote(client_id)}&redirect_uri={urllib.parse.quote(redirect_uri)}&state={urllib.parse.quote(state)}&code_challenge={urllib.parse.quote(code_challenge)}&code_challenge_method=S256">
-    <button class="btn btn-primary"   name="action" value="approve">✅ Autorizar acceso</button>
-    <button class="btn btn-secondary" name="action" value="deny">Cancelar</button>
-  </form>
-</div></body></html>"""
-        return _html(start_response, html)
+        return _html(start_response, _html_login(action_url))
 
     # ── OAuth token ──────────────────────────────────────────────────────────
     if path == '/oauth/token' and method == 'POST':
