@@ -18,7 +18,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME          = 'corp-mcp-py'
-SERVER_VERSION       = '4.18.2'
+SERVER_VERSION       = '4.18.3'
 API_BASE_URL         = os.environ.get('API_BASE_URL',  'https://api.pintuandes.com')
 API_INTERNAL_KEY     = os.environ.get('INTERNAL_KEY',  '')
 MCP_VERSION         = '2025-11-25'
@@ -844,6 +844,12 @@ pre{{margin:0;white-space:pre-wrap;word-break:break-all}}</style></head>
 
         with _oauth_lock:
             entry = _auth_codes.pop(code, None)
+
+        # Código no encontrado en este worker — recargar del disco (otro worker lo pudo haber generado)
+        if not entry:
+            _oauth_load()
+            with _oauth_lock:
+                entry = _auth_codes.pop(code, None)
 
         if not entry or time.time() > entry['exp']:
             _log('oauth_token_err', {'reason': 'invalid or expired code'})
