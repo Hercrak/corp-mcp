@@ -17,7 +17,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME          = 'corp-mcp-py'
-SERVER_VERSION       = '4.18.0'
+SERVER_VERSION       = '4.18.1'
 API_BASE_URL         = os.environ.get('API_BASE_URL',  'https://api.pintuandes.com')
 API_INTERNAL_KEY     = os.environ.get('INTERNAL_KEY',  '')
 MCP_VERSION         = '2025-11-25'
@@ -752,36 +752,40 @@ pre{{margin:0;white-space:pre-wrap;word-break:break-all}}</style></head>
         if method == 'POST':
             bp     = _parse_qs(_read_body(environ).decode('utf-8', errors='replace'))
             action = bp.get('action', '')
-            _log('oauth_authorize_post', {'action': action})
+            _log('oauth_authorize_post', {'action': action, 'keys': list(bp.keys())})
+            try:
+                if action == 'deny':
+                    sep = '&' if '?' in redirect_uri else '?'
+                    loc = f"{redirect_uri}{sep}error=access_denied&state={urllib.parse.quote(state)}"
+                    start_response('302 Found', [('Location', loc)])
+                    return [b'']
 
-            if action == 'deny':
-                sep = '&' if '?' in redirect_uri else '?'
-                loc = f"{redirect_uri}{sep}error=access_denied&state={urllib.parse.quote(state)}"
-                start_response('302 Found', [('Location', loc)])
-                return [b'']
+                if action == 'login':
+                    cod = (bp.get('cod') or '').strip()
+                    pwd = (bp.get('pwd') or '').strip()
+                    usuario = _validate_user_login(cod, pwd) if cod and pwd else None
+                    if not usuario:
+                        return _html(start_response,
+                                     _html_login(action_url, 'Usuario o contraseña incorrectos'))
+                    proof = _proof_make(usuario['cod'])
+                    _log('oauth_login_ok', {'cod': usuario['cod'], 'ip': environ.get('REMOTE_ADDR', '')})
+                    return _html(start_response, _html_approve(action_url, usuario, proof))
 
-            if action == 'login':
-                cod = (bp.get('cod') or '').strip()
-                pwd = (bp.get('pwd') or '').strip()
-                usuario = _validate_user_login(cod, pwd) if cod and pwd else None
-                if not usuario:
-                    return _html(start_response,
-                                 _html_login(action_url, 'Usuario o contraseña incorrectos'))
-                proof = _proof_make(usuario['cod'])
-                _log('oauth_login_ok', {'cod': usuario['cod'], 'ip': environ.get('REMOTE_ADDR', '')})
-                return _html(start_response, _html_approve(action_url, usuario, proof))
+                if action == 'approve':
+                    cod = _proof_verify(bp.get('auth_proof', ''))
+                    if not cod:
+                        return _html(start_response,
+                                     _html_login(action_url, 'Sesión expirada. Ingresa nuevamente.'))
+                    code = _new_auth_code(client_id, redirect_uri, code_challenge)
+                    _log('oauth_approved', {'cod': cod, 'ip': environ.get('REMOTE_ADDR', '')})
+                    sep  = '&' if '?' in redirect_uri else '?'
+                    loc  = f"{redirect_uri}{sep}code={urllib.parse.quote(code)}&state={urllib.parse.quote(state)}"
+                    start_response('302 Found', [('Location', loc), ('Cache-Control', 'no-store')])
+                    return [b'']
 
-            if action == 'approve':
-                cod = _proof_verify(bp.get('auth_proof', ''))
-                if not cod:
-                    return _html(start_response,
-                                 _html_login(action_url, 'Sesión expirada. Ingresa nuevamente.'))
-                code = _new_auth_code(client_id, redirect_uri, code_challenge)
-                _log('oauth_approved', {'cod': cod, 'ip': environ.get('REMOTE_ADDR', '')})
-                sep  = '&' if '?' in redirect_uri else '?'
-                loc  = f"{redirect_uri}{sep}code={urllib.parse.quote(code)}&state={urllib.parse.quote(state)}"
-                start_response('302 Found', [('Location', loc), ('Cache-Control', 'no-store')])
-                return [b'']
+            except Exception as e:
+                _log('oauth_authorize_err', {'error': str(e), 'action': action})
+                return _html(start_response, _html_login(action_url, f'Error interno: {str(e)}'))
 
         return _html(start_response, _html_login(action_url))
 
