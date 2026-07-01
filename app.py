@@ -18,7 +18,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME          = 'corp-mcp-py'
-SERVER_VERSION       = '4.18.4'
+SERVER_VERSION       = '4.18.5'
 API_BASE_URL         = os.environ.get('API_BASE_URL',  'https://api.pintuandes.com')
 API_INTERNAL_KEY     = os.environ.get('INTERNAL_KEY',  '')
 MCP_VERSION         = '2025-11-25'
@@ -303,6 +303,11 @@ TOOLS = [
         'description': (
             'Consulta estadísticas de ventas de Corporativo C.A. por período con filtros obligatorios. '
             'Retorna por fila: Cantidad (Unidades Vendidas), Monto (en dólares) y Costo (en dólares). '
+            'IMPORTANTE sobre el campo Mes: el campo "Mes" en el resultado muestra el MES de la operación '
+            'en formato YYYY-MM (ej: 2026-06 = junio 2026). No es una fecha específica — '
+            'todos los registros de un mismo mes muestran el mismo valor de Mes. '
+            'Una consulta de junio 2026 puede retornar cientos de registros todos con Mes=2026-06, '
+            'lo cual es correcto y esperado. '
             'REGLA OBLIGATORIA: además del rango de fechas, SIEMPRE debes aplicar al menos un filtro adicional '
             '(producto, almacén, cliente, vendedor o marca). Nunca ejecutes sin al menos uno de estos filtros '
             'porque la consulta retornaría miles de registros y la respuesta sería lenta o inutilizable. '
@@ -410,12 +415,14 @@ def _tool_consultar_ventas(args):
     if not rows:
         return 'No se encontraron ventas con los filtros indicados.'
     lines = [f'Estadística de ventas ({len(rows)} registros):',
-             f'{"Mes":<12} {"Producto":<16} {"Almacén":<10} {"Cliente":<22} {"Vendedor":<20} '
+             f'{"Mes":<9} {"Producto":<16} {"Almacén":<10} {"Cliente":<22} {"Vendedor":<20} '
              f'{"Cant.(Unid.)":>12} {"Monto (USD)":>12} {"Costo (USD)":>12}']
-    lines.append('-' * 126)
+    lines.append('-' * 123)
     for r in rows:
+        mes_raw = str(r.get('oprMes', ''))
+        mes_fmt = mes_raw[:7] if len(mes_raw) >= 7 else mes_raw  # "2026-06-01" → "2026-06"
         lines.append(
-            f"{str(r.get('oprMes','')):<12} "
+            f"{mes_fmt:<9} "
             f"{str(r.get('prdCdg','')).strip():<16} "
             f"{str(r.get('Almacen','')).strip():<10} "
             f"{str(r.get('Cliente','')).strip():<22} "
@@ -427,8 +434,8 @@ def _tool_consultar_ventas(args):
     total_cnt = sum(float(r.get('oprCnt', 0)) for r in rows)
     total_mnt = sum(float(r.get('oprMnt', 0)) for r in rows)
     total_cst = sum(float(r.get('oprCst', 0)) for r in rows)
-    lines.append('-' * 126)
-    lines.append(f"{'TOTALES':<62} {total_cnt:>12.2f} {total_mnt:>12.2f} {total_cst:>12.2f}")
+    lines.append('-' * 123)
+    lines.append(f"{'TOTALES':<59} {total_cnt:>12.2f} {total_mnt:>12.2f} {total_cst:>12.2f}")
     return '\n'.join(lines)
 
 
