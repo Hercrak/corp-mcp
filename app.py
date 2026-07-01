@@ -18,7 +18,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME          = 'corp-mcp-py'
-SERVER_VERSION       = '4.18.3'
+SERVER_VERSION       = '4.18.4'
 API_BASE_URL         = os.environ.get('API_BASE_URL',  'https://api.pintuandes.com')
 API_INTERNAL_KEY     = os.environ.get('INTERNAL_KEY',  '')
 MCP_VERSION         = '2025-11-25'
@@ -220,7 +220,7 @@ def _html_login(action_url, error=''):
 <title>Corporativo C.A. — Acceso</title>
 <style>{_OAUTH_CSS}</style></head>
 <body><div class="card">
-  <div class="logo">🏢</div>
+  <img src="http://www.pintuandes.com/corporativo_logo.png" alt="Corporativo C.A." style="height:64px;margin-bottom:12px;object-fit:contain">
   <h1>Corporativo C.A.</h1>
   <p class="sub">Ingresa tus credenciales para conectar Claude AI</p>
   {err}
@@ -245,7 +245,7 @@ def _html_approve(action_url, usuario, proof):
 <title>Corporativo C.A. — Autorizar</title>
 <style>{_OAUTH_CSS}</style></head>
 <body><div class="card">
-  <div class="logo">🏢</div>
+  <img src="http://www.pintuandes.com/corporativo_logo.png" alt="Corporativo C.A." style="height:64px;margin-bottom:12px;object-fit:contain">
   <h1>Corporativo C.A.</h1>
   <div class="ok-box">
     ✅ Bienvenido, <strong>{nomb}</strong><br>
