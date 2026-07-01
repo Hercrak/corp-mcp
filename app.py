@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -17,7 +18,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME          = 'corp-mcp-py'
-SERVER_VERSION       = '4.18.1'
+SERVER_VERSION       = '4.18.2'
 API_BASE_URL         = os.environ.get('API_BASE_URL',  'https://api.pintuandes.com')
 API_INTERNAL_KEY     = os.environ.get('INTERNAL_KEY',  '')
 MCP_VERSION         = '2025-11-25'
