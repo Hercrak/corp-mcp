@@ -18,7 +18,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME          = 'corp-mcp-py'
-SERVER_VERSION       = '4.19.2'
+SERVER_VERSION       = '4.19.3'
 API_BASE_URL         = os.environ.get('API_BASE_URL',  'https://api.pintuandes.com')
 API_INTERNAL_KEY     = os.environ.get('INTERNAL_KEY',  '')
 MCP_VERSION         = '2025-11-25'
@@ -853,9 +853,9 @@ pre{{margin:0;white-space:pre-wrap;word-break:break-all}}</style></head>
 
             def _run(cmd):
                 try:
-                    r = subprocess.run(cmd, cwd=app_dir, capture_output=True,
-                                       text=True, timeout=45)
-                    output.append(f"$ {' '.join(cmd)}\n{(r.stdout + r.stderr).strip()}")
+                    r = subprocess.run(cmd, cwd=app_dir, capture_output=True, timeout=45)
+                    out = (r.stdout + r.stderr).decode('utf-8', errors='replace').strip()
+                    output.append(f"$ {' '.join(cmd)}\n{out}")
                     return r.returncode
                 except Exception as ex:
                     output.append(f"$ {' '.join(cmd)}\nERROR: {type(ex).__name__}: {ex}")
