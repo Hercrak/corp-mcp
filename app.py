@@ -18,7 +18,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME          = 'corp-mcp-py'
-SERVER_VERSION       = '4.18.5'
+SERVER_VERSION       = '4.19.0'
 API_BASE_URL         = os.environ.get('API_BASE_URL',  'https://api.pintuandes.com')
 API_INTERNAL_KEY     = os.environ.get('INTERNAL_KEY',  '')
 MCP_VERSION         = '2025-11-25'
@@ -301,26 +301,20 @@ TOOLS = [
     {
         'name': 'consultar_ventas',
         'description': (
-            'Consulta estadísticas de ventas de Corporativo C.A. por período con filtros obligatorios. '
-            'Retorna por fila: Cantidad (Unidades Vendidas), Monto (en dólares) y Costo (en dólares). '
-            'IMPORTANTE sobre el campo Mes: el campo "Mes" en el resultado muestra el MES de la operación '
-            'en formato YYYY-MM (ej: 2026-06 = junio 2026). No es una fecha específica — '
-            'todos los registros de un mismo mes muestran el mismo valor de Mes. '
-            'Una consulta de junio 2026 puede retornar cientos de registros todos con Mes=2026-06, '
-            'lo cual es correcto y esperado. '
-            'REGLA OBLIGATORIA: además del rango de fechas, SIEMPRE debes aplicar al menos un filtro adicional '
-            '(producto, almacén, cliente, vendedor o marca). Nunca ejecutes sin al menos uno de estos filtros '
-            'porque la consulta retornaría miles de registros y la respuesta sería lenta o inutilizable. '
-            'Si el usuario no especifica ningún filtro adicional, pídele que indique al menos uno antes de ejecutar. '
-            'IMPORTANTE sobre nombres vs códigos: los filtros usan CÓDIGOS, no nombres. '
-            'Si el usuario menciona un cliente, vendedor o producto por nombre (ej: "REYES CONTRERAS"), '
-            'primero usa buscar_clientes, buscar_vendedores o buscar_productos para obtener su código, '
-            'y luego llama a consultar_ventas con ese código. '
-            'Ejemplos de interpretación: '
-            '"ventas de enero 2026 al cliente REYES" → primero buscar_clientes("REYES"), obtener código, luego consultar_ventas; '
-            '"ventas del producto BOLSA en febrero" → producto_desde=BOLSA, producto_hasta=BOLSA, desde=..., hasta=...; '
-            '"ventas del vendedor 24 en 2026" → vendedor_desde=24, vendedor_hasta=24; '
-            '"ventas del almacén 002 este mes" → almacen_desde=002, almacen_hasta=002.'
+            'Consulta el DETALLE de ventas de Corporativo C.A. línea por línea (producto × cliente × vendedor × día). '
+            'Úsalo cuando el usuario necesite ver el desglose completo de transacciones, no un resumen. '
+            'Para resúmenes usa: ventas_por_mes, ventas_por_producto, ventas_por_cliente, ventas_por_vendedor o ventas_por_proveedor. '
+            'Retorna por fila: Producto, Almacén, Cliente, Vendedor, Cantidad (Unidades), Monto (USD), Costo (USD). '
+            'El campo Mes muestra el MES en formato YYYY-MM (ej: 2026-06 = junio 2026), no una fecha exacta. '
+            'REGLA OBLIGATORIA: además del rango de fechas, SIEMPRE aplica al menos un filtro adicional '
+            '(producto, almacén, cliente, vendedor o marca). Sin filtros la consulta puede retornar miles de registros. '
+            'Si el usuario no indica filtro, pídele uno antes de ejecutar. '
+            'Los filtros usan CÓDIGOS: si el usuario da un nombre, '
+            'primero usa buscar_clientes / buscar_vendedores / buscar_productos para obtener el código. '
+            'Ejemplos: '
+            '"ventas al cliente REYES en enero" → buscar_clientes("REYES") → código → consultar_ventas; '
+            '"ventas del producto BOLSA en febrero" → producto_desde=BOLSA, producto_hasta=BOLSA; '
+            '"ventas del vendedor 24" → vendedor_desde=24, vendedor_hasta=24.'
         ),
         'inputSchema': {
             'type': 'object',
@@ -378,7 +372,8 @@ TOOLS = [
         'name': 'buscar_productos',
         'description': (
             'Busca productos por nombre o código. '
-            'Úsalo cuando el usuario mencione un producto por nombre y necesites el código para filtrar consultar_ventas.'
+            'Úsalo cuando el usuario mencione un producto por nombre y necesites el código para filtrar consultar_ventas o ventas_por_producto. '
+            'El resultado también incluye el campo mrcCdg (código de marca/proveedor) útil para ventas_por_proveedor.'
         ),
         'inputSchema': {
             'type': 'object',
@@ -387,6 +382,104 @@ TOOLS = [
                 'limite': {'type': 'integer', 'description': 'Máximo de registros (default 20)'},
             },
             'required': ['buscar'],
+        },
+    },
+    {
+        'name': 'ventas_por_mes',
+        'description': (
+            'Retorna las ventas de Corporativo C.A. ACUMULADAS POR MES: total de unidades, monto y costo en cada mes del período. '
+            'Úsalo cuando el usuario pida evolución mensual, tendencia de ventas, comparar meses o ver el resumen del año. '
+            'No tiene filtros de producto, cliente ni vendedor — muestra el total global por mes. '
+            'Si necesitas ver un período desde el inicio del año y el usuario no indica fecha, usa desde=primer día del año actual.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'desde': {'type': 'string', 'description': 'Fecha inicio YYYY-MM-DD (default: primer día del año actual)'},
+                'hasta': {'type': 'string', 'description': 'Fecha fin YYYY-MM-DD (default: hoy)'},
+            },
+            'required': [],
+        },
+    },
+    {
+        'name': 'ventas_por_producto',
+        'description': (
+            'Retorna las ventas de Corporativo C.A. agrupadas por MES y PRODUCTO: unidades, monto y costo. '
+            'Úsalo para ver qué productos se vendieron más, ranking de productos, o ventas de un producto específico en el tiempo. '
+            'Si el usuario menciona un producto por nombre, primero usa buscar_productos para obtener el código (prdCdg). '
+            'Si no indica fecha, usa desde=primer día del año actual. '
+            'Los filtros producto_desde / producto_hasta son opcionales: sin ellos retorna todos los productos.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'desde':           {'type': 'string', 'description': 'Fecha inicio YYYY-MM-DD (default: primer día del año actual)'},
+                'hasta':           {'type': 'string', 'description': 'Fecha fin YYYY-MM-DD (default: hoy)'},
+                'producto_desde':  {'type': 'string', 'description': 'Código de producto inicial. Para un solo producto usa el mismo código en producto_desde y producto_hasta'},
+                'producto_hasta':  {'type': 'string', 'description': 'Código de producto final'},
+            },
+            'required': [],
+        },
+    },
+    {
+        'name': 'ventas_por_cliente',
+        'description': (
+            'Retorna las ventas de Corporativo C.A. agrupadas por MES y CLIENTE: unidades, monto y costo. '
+            'Úsalo para análisis de cartera, ver los mejores clientes, o ventas de un cliente específico en el tiempo. '
+            'Si el usuario menciona un cliente por nombre, primero usa buscar_clientes para obtener el código (socCdg). '
+            'Si no indica fecha, usa desde=primer día del año actual. '
+            'Los filtros cliente_desde / cliente_hasta son opcionales: sin ellos retorna todos los clientes.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'desde':          {'type': 'string', 'description': 'Fecha inicio YYYY-MM-DD (default: primer día del año actual)'},
+                'hasta':          {'type': 'string', 'description': 'Fecha fin YYYY-MM-DD (default: hoy)'},
+                'cliente_desde':  {'type': 'string', 'description': 'Código de cliente inicial. Para un solo cliente usa el mismo código en ambos'},
+                'cliente_hasta':  {'type': 'string', 'description': 'Código de cliente final'},
+            },
+            'required': [],
+        },
+    },
+    {
+        'name': 'ventas_por_vendedor',
+        'description': (
+            'Retorna las ventas de Corporativo C.A. agrupadas por MES y VENDEDOR: unidades, monto y costo. '
+            'Úsalo para evaluar desempeño del equipo de ventas, ranking de vendedores, o seguimiento de un vendedor específico. '
+            'Si el usuario menciona un vendedor por nombre, primero usa buscar_vendedores para obtener el código. '
+            'Si no indica fecha, usa desde=primer día del año actual. '
+            'Los filtros vendedor_desde / vendedor_hasta son opcionales: sin ellos retorna todos los vendedores.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'desde':            {'type': 'string', 'description': 'Fecha inicio YYYY-MM-DD (default: primer día del año actual)'},
+                'hasta':            {'type': 'string', 'description': 'Fecha fin YYYY-MM-DD (default: hoy)'},
+                'vendedor_desde':   {'type': 'string', 'description': 'Código de vendedor inicial. Para un solo vendedor usa el mismo código en ambos'},
+                'vendedor_hasta':   {'type': 'string', 'description': 'Código de vendedor final'},
+            },
+            'required': [],
+        },
+    },
+    {
+        'name': 'ventas_por_proveedor',
+        'description': (
+            'Retorna las ventas de Corporativo C.A. agrupadas por MES y PROVEEDOR/MARCA: unidades, monto y costo. '
+            'Úsalo para ver la participación de cada marca en las ventas (ej: AMANCO, TIGRE, DURMAN). '
+            'El código de proveedor/marca es el campo mrcCdg que aparece en buscar_productos — '
+            'si el usuario menciona una marca, usa buscar_productos para encontrar el mrcCdg. '
+            'Si no indica fecha, usa desde=primer día del año actual. '
+            'Los filtros marca_desde / marca_hasta son opcionales: sin ellos retorna todos los proveedores.'
+        ),
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'desde':        {'type': 'string', 'description': 'Fecha inicio YYYY-MM-DD (default: primer día del año actual)'},
+                'hasta':        {'type': 'string', 'description': 'Fecha fin YYYY-MM-DD (default: hoy)'},
+                'marca_desde':  {'type': 'string', 'description': 'Código de proveedor/marca inicial (campo mrcCdg de buscar_productos)'},
+                'marca_hasta':  {'type': 'string', 'description': 'Código de proveedor/marca final'},
+            },
+            'required': [],
         },
     },
 ]
@@ -478,12 +571,99 @@ def _tool_buscar_productos(args):
     return '\n'.join(lines)
 
 
+def _year_start():
+    return f'{date.today().year}-01-01'
+
+
+def _tool_ventas_por_mes(args):
+    result = _api('/ventas', {
+        'modo':  'vntStdMes',
+        'desde': args.get('desde') or _year_start(),
+        'hasta': args.get('hasta'),
+    })
+    if not result.get('ok'):
+        return f"Error: {result.get('error')}"
+    rows = result.get('data', [])
+    if not rows:
+        return 'No se encontraron ventas en el período indicado.'
+    return _dumps({'total_meses': len(rows), 'data': rows})
+
+
+def _tool_ventas_por_producto(args):
+    result = _api('/ventas', {
+        'modo':           'vntStdPrd',
+        'desde':          args.get('desde') or _year_start(),
+        'hasta':          args.get('hasta'),
+        'producto_desde': args.get('producto_desde'),
+        'producto_hasta': args.get('producto_hasta'),
+    })
+    if not result.get('ok'):
+        return f"Error: {result.get('error')}"
+    rows = result.get('data', [])
+    if not rows:
+        return 'No se encontraron ventas con los filtros indicados.'
+    return _dumps({'total': len(rows), 'data': rows})
+
+
+def _tool_ventas_por_cliente(args):
+    result = _api('/ventas', {
+        'modo':          'vntStdClt',
+        'desde':         args.get('desde') or _year_start(),
+        'hasta':         args.get('hasta'),
+        'cliente_desde': args.get('cliente_desde'),
+        'cliente_hasta': args.get('cliente_hasta'),
+    })
+    if not result.get('ok'):
+        return f"Error: {result.get('error')}"
+    rows = result.get('data', [])
+    if not rows:
+        return 'No se encontraron ventas con los filtros indicados.'
+    return _dumps({'total': len(rows), 'data': rows})
+
+
+def _tool_ventas_por_vendedor(args):
+    result = _api('/ventas', {
+        'modo':           'vntStdVnd',
+        'desde':          args.get('desde') or _year_start(),
+        'hasta':          args.get('hasta'),
+        'vendedor_desde': args.get('vendedor_desde'),
+        'vendedor_hasta': args.get('vendedor_hasta'),
+    })
+    if not result.get('ok'):
+        return f"Error: {result.get('error')}"
+    rows = result.get('data', [])
+    if not rows:
+        return 'No se encontraron ventas con los filtros indicados.'
+    return _dumps({'total': len(rows), 'data': rows})
+
+
+def _tool_ventas_por_proveedor(args):
+    result = _api('/ventas', {
+        'modo':        'vntStdPrv',
+        'desde':       args.get('desde') or _year_start(),
+        'hasta':       args.get('hasta'),
+        'marca_desde': args.get('marca_desde'),
+        'marca_hasta': args.get('marca_hasta'),
+    })
+    if not result.get('ok'):
+        return f"Error: {result.get('error')}"
+    rows = result.get('data', [])
+    if not rows:
+        return 'No se encontraron ventas con los filtros indicados.'
+    return _dumps({'total': len(rows), 'data': rows})
+
+
 def _call_tool(name, arguments):
     try:
-        if name == 'consultar_ventas':              return _tool_consultar_ventas(arguments)
-        if name == 'buscar_clientes':               return _tool_buscar_clientes(arguments)
-        if name == 'buscar_vendedores':             return _tool_buscar_vendedores(arguments)
-        if name == 'buscar_productos':              return _tool_buscar_productos(arguments)
+        if name == 'consultar_ventas':      return _tool_consultar_ventas(arguments)
+        if name == 'buscar_clientes':       return _tool_buscar_clientes(arguments)
+        if name == 'buscar_vendedores':     return _tool_buscar_vendedores(arguments)
+        if name == 'buscar_productos':      return _tool_buscar_productos(arguments)
+        if name == 'ventas_por_mes':        return _tool_ventas_por_mes(arguments)
+        if name == 'ventas_por_producto':   return _tool_ventas_por_producto(arguments)
+        if name == 'ventas_por_cliente':    return _tool_ventas_por_cliente(arguments)
+        if name == 'ventas_por_vendedor':   return _tool_ventas_por_vendedor(arguments)
+        if name == 'ventas_por_proveedor':  return _tool_ventas_por_proveedor(arguments)
         return f'Herramienta desconocida: {name}'
     except Exception as e:
         return f'Error al ejecutar {name}: {str(e)}'
