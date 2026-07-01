@@ -18,7 +18,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME          = 'corp-mcp-py'
-SERVER_VERSION       = '4.19.0'
+SERVER_VERSION       = '4.19.1'
 API_BASE_URL         = os.environ.get('API_BASE_URL',  'https://api.pintuandes.com')
 API_INTERNAL_KEY     = os.environ.get('INTERNAL_KEY',  '')
 MCP_VERSION         = '2025-11-25'
@@ -505,9 +505,10 @@ def _tool_consultar_ventas(args):
     if not result.get('ok'):
         return f"Error: {result.get('error')}"
     rows = result.get('data', [])
+    emp  = result.get('empresa', result.get('base', ''))
     if not rows:
         return 'No se encontraron ventas con los filtros indicados.'
-    lines = [f'Estadística de ventas ({len(rows)} registros):',
+    lines = [f'Estadística de ventas — {emp} ({len(rows)} registros):',
              f'{"Mes":<9} {"Producto":<16} {"Almacén":<10} {"Cliente":<22} {"Vendedor":<20} '
              f'{"Cant.(Unid.)":>12} {"Monto (USD)":>12} {"Costo (USD)":>12}']
     lines.append('-' * 123)
@@ -586,7 +587,8 @@ def _tool_ventas_por_mes(args):
     rows = result.get('data', [])
     if not rows:
         return 'No se encontraron ventas en el período indicado.'
-    return _dumps({'total_meses': len(rows), 'data': rows})
+    return _dumps({'empresa': result.get('empresa', result.get('base', '')),
+                   'total_meses': len(rows), 'data': rows})
 
 
 def _tool_ventas_por_producto(args):
@@ -602,7 +604,8 @@ def _tool_ventas_por_producto(args):
     rows = result.get('data', [])
     if not rows:
         return 'No se encontraron ventas con los filtros indicados.'
-    return _dumps({'total': len(rows), 'data': rows})
+    return _dumps({'empresa': result.get('empresa', result.get('base', '')),
+                   'total': len(rows), 'data': rows})
 
 
 def _tool_ventas_por_cliente(args):
@@ -618,7 +621,8 @@ def _tool_ventas_por_cliente(args):
     rows = result.get('data', [])
     if not rows:
         return 'No se encontraron ventas con los filtros indicados.'
-    return _dumps({'total': len(rows), 'data': rows})
+    return _dumps({'empresa': result.get('empresa', result.get('base', '')),
+                   'total': len(rows), 'data': rows})
 
 
 def _tool_ventas_por_vendedor(args):
@@ -634,7 +638,8 @@ def _tool_ventas_por_vendedor(args):
     rows = result.get('data', [])
     if not rows:
         return 'No se encontraron ventas con los filtros indicados.'
-    return _dumps({'total': len(rows), 'data': rows})
+    return _dumps({'empresa': result.get('empresa', result.get('base', '')),
+                   'total': len(rows), 'data': rows})
 
 
 def _tool_ventas_por_proveedor(args):
@@ -650,7 +655,8 @@ def _tool_ventas_por_proveedor(args):
     rows = result.get('data', [])
     if not rows:
         return 'No se encontraron ventas con los filtros indicados.'
-    return _dumps({'total': len(rows), 'data': rows})
+    return _dumps({'empresa': result.get('empresa', result.get('base', '')),
+                   'total': len(rows), 'data': rows})
 
 
 def _call_tool(name, arguments):
