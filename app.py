@@ -18,7 +18,7 @@ OAUTH_CLIENT_ID     = os.environ.get('OAUTH_CLIENT_ID', '')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET', '')
 BASE_URL            = os.environ.get('BASE_URL', 'https://mcp.pintuandes.com')
 SERVER_NAME          = 'corp-mcp-py'
-SERVER_VERSION       = '4.19.1'
+SERVER_VERSION       = '4.19.2'
 API_BASE_URL         = os.environ.get('API_BASE_URL',  'https://api.pintuandes.com')
 API_INTERNAL_KEY     = os.environ.get('INTERNAL_KEY',  '')
 MCP_VERSION         = '2025-11-25'
@@ -841,35 +841,46 @@ pre{{margin:0;white-space:pre-wrap;word-break:break-all}}</style></head>
         if not RELOAD_TOKEN or qs.get('token') != RELOAD_TOKEN:
             return _json(start_response, '401 Unauthorized', {'error': 'Token inválido'})
         _log('deploy', {'ip': environ.get('REMOTE_ADDR', '')})
-        app_dir = os.path.dirname(os.path.abspath(__file__))
-        REPO_URL = 'https://github.com/Hercrak/corp-mcp.git'
-        output = []
-
-        def _run(cmd):
-            r = subprocess.run(cmd, cwd=app_dir, capture_output=True, text=True, timeout=30)
-            output.append(f"$ {' '.join(cmd)}\n{(r.stdout + r.stderr).strip()}")
-            return r.returncode
-
-        # Inicializar git si no existe .git en el directorio
-        if not os.path.exists(os.path.join(app_dir, '.git')):
-            _run(['git', 'init'])
-            _run(['git', 'remote', 'add', 'origin', REPO_URL])
-
-        # Sincronizar desde GitHub (sobreescribe cualquier cambio local)
-        _run(['git', 'fetch', 'origin', 'main'])
-        _run(['git', 'reset', '--hard', 'origin/main'])
-
-        # Señalar a Passenger que reinicie en la próxima petición
         try:
-            restart = os.path.join(app_dir, 'tmp', 'restart.txt')
-            os.makedirs(os.path.dirname(restart), exist_ok=True)
-            with open(restart, 'w') as f:
-                f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
-            output.append('tmp/restart.txt actualizado — Passenger reiniciará en la próxima petición')
-        except Exception as e:
-            output.append(f'restart.txt error: {e}')
+            import shutil
+            app_dir  = os.path.dirname(os.path.abspath(__file__))
+            REPO_URL = 'https://github.com/Hercrak/corp-mcp.git'
+            output   = []
+            git_bin  = shutil.which('git') or 'git'
+            output.append(f'git encontrado en: {git_bin}')
+            output.append(f'app_dir: {app_dir}')
+            output.append(f'PATH: {os.environ.get("PATH", "(vacío)")}')
 
-        return _json(start_response, '200 OK', {'deploy': '\n\n'.join(output)})
+            def _run(cmd):
+                try:
+                    r = subprocess.run(cmd, cwd=app_dir, capture_output=True,
+                                       text=True, timeout=45)
+                    output.append(f"$ {' '.join(cmd)}\n{(r.stdout + r.stderr).strip()}")
+                    return r.returncode
+                except Exception as ex:
+                    output.append(f"$ {' '.join(cmd)}\nERROR: {type(ex).__name__}: {ex}")
+                    return -1
+
+            if not os.path.exists(os.path.join(app_dir, '.git')):
+                _run([git_bin, 'init'])
+                _run([git_bin, 'remote', 'add', 'origin', REPO_URL])
+
+            _run([git_bin, 'fetch', 'origin', 'main'])
+            _run([git_bin, 'reset', '--hard', 'origin/main'])
+
+            try:
+                restart = os.path.join(app_dir, 'tmp', 'restart.txt')
+                os.makedirs(os.path.dirname(restart), exist_ok=True)
+                with open(restart, 'w') as f:
+                    f.write(time.strftime('%Y-%m-%d %H:%M:%S'))
+                output.append('tmp/restart.txt actualizado — Passenger reiniciará en la próxima petición')
+            except Exception as e:
+                output.append(f'restart.txt error: {e}')
+
+            return _json(start_response, '200 OK', {'ok': True, 'deploy': '\n\n'.join(output)})
+        except Exception as e:
+            return _json(start_response, '200 OK', {'ok': False, 'error': str(e),
+                                                     'type': type(e).__name__})
 
     # ── OAuth Protected Resource Metadata (RFC 9728) — nuevo estándar MCP 2025
     if path in ('/.well-known/oauth-protected-resource',
